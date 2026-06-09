@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useDropZone, useFileDialog } from '@vueuse/core'
 import IconBase from './IconBase.vue'
 

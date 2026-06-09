@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { ImageItem } from '@/stores/images'
 import { formatBytes, formatSaving, optimizedFilename } from '@/utils/format'
 import IconBase from './IconBase.vue'
