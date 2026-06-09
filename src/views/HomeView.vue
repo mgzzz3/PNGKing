@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ElMessage } from 'element-plus'
+import { useRouter } from 'vue-router'
 import { useImagesStore } from '@/stores/images'
 import DropZone from '@/components/DropZone.vue'
 import FeatureCard from '@/components/FeatureCard.vue'
