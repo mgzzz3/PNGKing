@@ -150,7 +150,7 @@ async function downloadAll() {
             <option :value="0">不指定（按压缩强度）</option>
             <option :value="50 * 1024">50 KB</option>
             <option :value="100 * 1024">100 KB</option>
-            <option :value="250 * 1024">250 KB</option>
+            <option :value="200 * 1024">200 KB</option>
             <option :value="500 * 1024">500 KB</option>
             <option :value="1024 * 1024">1 MB</option>
             <option :value="2 * 1024 * 1024">2 MB</option>
