@@ -47,6 +47,7 @@ describe('images store', () => {
       status: 'queued',
       optimizedSize: delayedFile.size,
       removedMetadata: 0,
+      importSource: 'file_picker',
     }
     store.items.push(item)
 

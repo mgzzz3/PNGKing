@@ -23,6 +23,10 @@
   </head>
   <body>
     <div id="app"></div>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      window.gtag = window.gtag || function () { window.dataLayer.push(arguments); };
+    </script>
     <script type="module" src="/src/main.ts"></script>
     <script type="module">
       import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";

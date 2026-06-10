@@ -48,4 +48,4 @@ npm run preview
 
 Vue 3、Vite、TypeScript strict、Pinia、Vue Router 4、Element Plus、VueUse、JSZip、Vitest。
 
-详细产品边界与验收标准见 [`docs/spec.md`](docs/spec.md)。
+详细产品边界与验收标准见 [`docs/spec.md`](docs/spec.md)。Firebase Analytics 的事件含义、漏斗和控制台配置见 [`docs/analytics.md`](docs/analytics.md)。

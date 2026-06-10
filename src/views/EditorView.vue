@@ -5,15 +5,22 @@ import { onBeforeUnmount, watch } from 'vue'
 import JSZip from 'jszip'
 import { useImagesStore } from '@/stores/images'
 import { formatBytes, optimizedFilename } from '@/utils/format'
+import {
+  bytesToKilobytes,
+  formatsSummary,
+  savingPercent,
+  trackEvent,
+  type ImportSource,
+} from '@/utils/analytics'
 import IconBase from '@/components/IconBase.vue'
 import ImageRow from '@/components/ImageRow.vue'
 
 const store = useImagesStore()
 const { open, onChange } = useFileDialog({ accept: 'image/png,image/jpeg,image/webp,image/gif', multiple: true })
-onChange((files) => files && addFiles([...files]))
+onChange((files) => files && addFiles([...files], 'file_picker'))
 
-function addFiles(files: File[]) {
-  const { accepted, rejected } = store.addFiles(files)
+function addFiles(files: File[], source: ImportSource) {
+  const { accepted, rejected } = store.addFiles(files, source)
   if (accepted) ElMessage.success(`已添加 ${accepted} 张图片`)
   if (rejected.length) ElMessage.warning(`${rejected.length} 个文件格式不受支持`)
 }
@@ -30,9 +37,22 @@ let settingsVersion = 0
 let settingsTimer: number | undefined
 
 async function applySettings(version: number) {
+  const mode = store.targetSize ? 'target_size' : 'strength'
+  trackEvent('compression_settings_changed', {
+    compression_mode: mode,
+    compression_strength: store.targetSize ? undefined : store.compressionStrength,
+    target_kb: store.targetSize ? bytesToKilobytes(store.targetSize) : undefined,
+    queue_count: store.items.length,
+  })
   const results = await store.reprocessAll()
   if (version !== settingsVersion) return
   const failures = results.filter((result) => !result).length
+  trackEvent('reprocessing_completed', {
+    compression_mode: mode,
+    image_count: results.length,
+    success_count: results.length - failures,
+    failure_count: failures,
+  })
   if (failures) ElMessage.warning(`${failures} 张图片无法达到所选目标大小，已终止对应压缩`)
   else ElMessage.success('已按新设置重新压缩')
 }
@@ -48,6 +68,13 @@ watch(
     }, 150)
   },
   { flush: 'post' },
+)
+
+watch(
+  () => store.sortKey,
+  (sortKey, previousSortKey) => {
+    trackEvent('queue_sort_changed', { sort_key: sortKey, previous_sort_key: previousSortKey })
+  },
 )
 
 onBeforeUnmount(() => {
@@ -67,7 +94,21 @@ async function downloadAll() {
     anchor.href = url
     anchor.download = 'PNGKing-optimized.zip'
     anchor.click()
+    trackEvent('batch_download', {
+      outcome: 'success',
+      image_count: completed.length,
+      original_kb: bytesToKilobytes(completed.reduce((sum, item) => sum + item.file.size, 0)),
+      optimized_kb: bytesToKilobytes(completed.reduce((sum, item) => sum + (item.result?.size ?? 0), 0)),
+      saving_percent: savingPercent(
+        completed.reduce((sum, item) => sum + item.file.size, 0),
+        completed.reduce((sum, item) => sum + (item.result?.size ?? 0), 0),
+      ),
+      file_formats: formatsSummary(completed.map((item) => item.file)),
+    })
     URL.revokeObjectURL(url)
+  } catch {
+    trackEvent('batch_download', { outcome: 'error', image_count: completed.length })
+    ElMessage.error('打包下载失败，请稍后重试')
   } finally {
     store.isDownloading = false
   }

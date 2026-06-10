@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useDropZone, useFileDialog } from '@vueuse/core'
+import type { ImportSource } from '@/utils/analytics'
 import IconBase from './IconBase.vue'
 
-const emit = defineEmits<{ files: [files: File[]] }>()
+const emit = defineEmits<{ files: [files: File[], source: ImportSource] }>()
 const dropZoneRef = ref<HTMLElement>()
 const { isOverDropZone } = useDropZone(dropZoneRef, {
-  onDrop: (files) => files && emit('files', files),
+  onDrop: (files) => files && emit('files', files, 'drop'),
   dataTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
   multiple: true,
   preventDefaultForUnhandled: true,
@@ -15,7 +16,7 @@ const { open, onChange } = useFileDialog({
   accept: 'image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif',
   multiple: true,
 })
-onChange((files) => files && emit('files', [...files]))
+onChange((files) => files && emit('files', [...files], 'file_picker'))
 </script>
 
 <template>
