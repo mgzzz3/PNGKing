@@ -174,6 +174,38 @@ describe('optimizeImage', () => {
     expect(targeted.bytes.byteLength).toBeGreaterThan(smallest.bytes.byteLength)
   })
 
+  it('uses additional truecolor quality levels for distinct target sizes', () => {
+    const width = 96
+    const height = 96
+    const scanlines = new Uint8Array(height * (width * 4 + 1))
+    let random = 0x12345678
+    for (let row = 0; row < height; row += 1) {
+      for (let column = 0; column < width; column += 1) {
+        random = (random * 1664525 + 1013904223) >>> 0
+        const offset = row * (width * 4 + 1) + 1 + column * 4
+        scanlines[offset] = random & 0xff
+        scanlines[offset + 1] = (random >>> 8) & 0xff
+        scanlines[offset + 2] = (random >>> 16) & 0xff
+        scanlines[offset + 3] = 255
+      }
+    }
+    const source = concat(
+      [137, 80, 78, 71, 13, 10, 26, 10],
+      pngChunk('IHDR', [...u32be(width), ...u32be(height), 8, 6, 0, 0, 0]),
+      pngChunk('IDAT', [...deflate(scanlines, { level: 0 })]),
+      pngChunk('IEND'),
+    )
+
+    const smallerTarget = optimizeImage(source, 'image/png', { targetSize: 12 * 1024 })
+    const largerTarget = optimizeImage(source, 'image/png', { targetSize: 30 * 1024 })
+
+    expect(smallerTarget.targetReached).toBe(true)
+    expect(largerTarget.targetReached).toBe(true)
+    expect(smallerTarget.bytes.byteLength).toBeLessThanOrEqual(12 * 1024)
+    expect(largerTarget.bytes.byteLength).toBeLessThanOrEqual(30 * 1024)
+    expect(largerTarget.bytes.byteLength).toBeGreaterThan(smallerTarget.bytes.byteLength)
+  })
+
   it('reports when the requested target size cannot be reached', () => {
     const source = concat(
       [137, 80, 78, 71, 13, 10, 26, 10],

@@ -14,6 +14,7 @@ export interface OptimizationResult {
 
 const DEFAULT_STRENGTH = 6
 const STRENGTH_COLORS = [256, 256, 224, 192, 160, 128, 96, 64, 32, 16]
+const TARGET_TRUECOLOR_BITS = [7, 6, 5, 4, 3, 2, 1]
 const TARGET_PALETTE_SIZES = [256, 224, 192, 160, 128, 96, 64, 48, 32, 24, 16, 12, 8, 4, 2]
 
 const PNG_SIGNATURE_LENGTH = 8
@@ -311,6 +312,56 @@ function createPalette(pixels: Uint8Array, channels: number, maximumColors = 256
   return { palette, lookup }
 }
 
+function quantizeTruecolorPng(chunks: PngChunk[], inflated: Uint8Array, retainedBits: number): Uint8Array | undefined {
+  const headerChunk = chunks.find((chunk) => chunk.type === 'IHDR')
+  if (!headerChunk || headerChunk.data.length !== 13 || chunks.some((chunk) => chunk.type === 'acTL')) return undefined
+  const header = headerChunk.data
+  const view = new DataView(header.buffer, header.byteOffset, header.byteLength)
+  const width = view.getUint32(0)
+  const height = view.getUint32(4)
+  const bitDepth = header[8]
+  const colorType = header[9]
+  const interlace = header[12]
+  if (!width || !height || bitDepth !== 8 || interlace !== 0 || (colorType !== 2 && colorType !== 6)) return undefined
+
+  const channels = colorType === 6 ? 4 : 3
+  const pixels = decodePngPixels(inflated, width, height, channels)
+  if (!pixels) return undefined
+
+  const discardedBits = 8 - retainedBits
+  const step = 1 << discardedBits
+  const halfStep = step >> 1
+  const scanlines = new Uint8Array(height * (width * channels + 1))
+  for (let row = 0; row < height; row += 1) {
+    const scanlineOffset = row * (width * channels + 1)
+    const pixelOffset = row * width * channels
+    for (let column = 0; column < width; column += 1) {
+      const sourceOffset = pixelOffset + column * channels
+      const outputOffset = scanlineOffset + 1 + column * channels
+      const alpha = channels === 4 ? pixels[sourceOffset + 3]! : 255
+      for (let channel = 0; channel < channels; channel += 1) {
+        const value = alpha === 0 && channel < 3 ? 0 : pixels[sourceOffset + channel]!
+        scanlines[outputOffset + channel] = Math.min(255, Math.floor((value + halfStep) / step) * step)
+      }
+    }
+  }
+
+  const compressed = deflate(refilterPngScanlines(scanlines, header), { level: 9 })
+  const output: Uint8Array[] = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])]
+  let wroteImageData = false
+  for (const chunk of chunks) {
+    if (chunk.type === 'IDAT') {
+      if (!wroteImageData) {
+        output.push(createPngChunk('IDAT', compressed))
+        wroteImageData = true
+      }
+    } else {
+      output.push(chunk.bytes)
+    }
+  }
+  return wroteImageData ? concat(output) : undefined
+}
+
 function quantizePng(chunks: PngChunk[], inflated: Uint8Array, maximumColors: number): Uint8Array | undefined {
   const headerChunk = chunks.find((chunk) => chunk.type === 'IHDR')
   if (!headerChunk || headerChunk.data.length !== 13 || chunks.some((chunk) => chunk.type === 'acTL')) return undefined
@@ -441,17 +492,21 @@ function optimizePng(bytes: Uint8Array, options: OptimizationOptions): Optimizat
       if (targetSize !== undefined) {
         interface TargetCandidate {
           bytes: Uint8Array
-          paletteColors: number
+          qualityRank: number
         }
 
         const candidates: TargetCandidate[] = [
-          { bytes, paletteColors: Number.POSITIVE_INFINITY },
-          { bytes: metadataOptimized, paletteColors: Number.POSITIVE_INFINITY },
-          { bytes: recompressed, paletteColors: Number.POSITIVE_INFINITY },
+          { bytes, qualityRank: Number.POSITIVE_INFINITY },
+          { bytes: metadataOptimized, qualityRank: Number.POSITIVE_INFINITY },
+          { bytes: recompressed, qualityRank: Number.POSITIVE_INFINITY },
         ]
+        for (const retainedBits of TARGET_TRUECOLOR_BITS) {
+          const quantized = quantizeTruecolorPng(retainedChunks, inflated, retainedBits)
+          if (quantized) candidates.push({ bytes: quantized, qualityRank: 1_000_000 + retainedBits })
+        }
         for (const maximumColors of TARGET_PALETTE_SIZES) {
           const quantized = quantizePng(retainedChunks, inflated, maximumColors)
-          if (quantized) candidates.push({ bytes: quantized, paletteColors: maximumColors })
+          if (quantized) candidates.push({ bytes: quantized, qualityRank: maximumColors })
         }
         const eligible = candidates.filter((candidate) => candidate.bytes.length <= targetSize)
         const smallestSize = Math.min(...candidates.map((candidate) => candidate.bytes.length))
@@ -464,7 +519,7 @@ function optimizePng(bytes: Uint8Array, options: OptimizationOptions): Optimizat
         best = eligible.reduce((closest, candidate) => {
           if (candidate.bytes.length > closest.bytes.length) return candidate
           if (candidate.bytes.length < closest.bytes.length) return closest
-          return candidate.paletteColors > closest.paletteColors ? candidate : closest
+          return candidate.qualityRank > closest.qualityRank ? candidate : closest
         }).bytes
       } else {
         const strength = Math.min(9, Math.max(1, Math.round(options.strength ?? DEFAULT_STRENGTH)))
