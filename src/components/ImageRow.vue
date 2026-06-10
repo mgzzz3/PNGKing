@@ -28,10 +28,11 @@ function download() {
     </div>
     <div class="status-cell">
       <template v-if="item.status === 'processing' || item.status === 'queued'">
-        <span class="spinner"></span><small>正在优化...</small>
+        <span class="spinner"></span>
+        <div><small>正在优化...</small><strong v-if="item.estimatedSize" class="estimate">预计 {{ formatBytes(item.estimatedSize) }}</strong></div>
       </template>
       <template v-else-if="item.status === 'error'">
-        <span class="error-dot">!</span><small>{{ item.error }}</small>
+        <span class="error-dot">!</span><small class="error-message" :title="item.error">{{ item.error }}</small>
       </template>
       <template v-else>
         <span class="done-check"><IconBase name="check" /></span>
