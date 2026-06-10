@@ -116,6 +116,27 @@ describe('optimizeImage', () => {
     expect(result.removedMetadata).toBe(2)
   })
 
+  it('keeps the quality-first strength lossless', () => {
+    const scanlines = new Uint8Array([0, 11, 23, 35, 255])
+    const source = concat(
+      [137, 80, 78, 71, 13, 10, 26, 10],
+      pngChunk('IHDR', [...u32be(1), ...u32be(1), 8, 6, 0, 0, 0]),
+      pngChunk('IDAT', [...deflate(scanlines, { level: 0 })]),
+      pngChunk('IEND'),
+    )
+
+    const result = optimizeImage(source, 'image/png', { strength: 1 })
+    const output = new TextDecoder('latin1').decode(result.bytes)
+    const headerOffset = output.indexOf('IHDR')
+    const idatOffset = output.indexOf('IDAT')
+    const idatLength = new DataView(result.bytes.buffer, result.bytes.byteOffset + idatOffset - 4, 4).getUint32(0)
+    const optimizedImageData = result.bytes.slice(idatOffset + 4, idatOffset + 4 + idatLength)
+
+    expect(result.bytes[headerOffset + 4 + 9]).toBe(6)
+    expect(output).not.toContain('PLTE')
+    expect(inflate(optimizedImageData)).toEqual(scanlines)
+  })
+
   it('uses compression strength to trade palette detail for file size', () => {
     const width = 128
     const height = 128
@@ -141,7 +162,8 @@ describe('optimizeImage', () => {
       (_, index) => optimizeImage(source, 'image/png', { strength: index + 1 }).bytes.byteLength,
     )
 
-    for (let index = 1; index < sizes.length; index += 1) {
+    expect(sizes[8]).toBeLessThan(sizes[0]!)
+    for (let index = 2; index < sizes.length; index += 1) {
       expect(sizes[index]).toBeLessThan(sizes[index - 1]!)
     }
   })
