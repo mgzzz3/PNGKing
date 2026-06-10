@@ -8,7 +8,8 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "strict": true,
-    "types": ["node"]
+    "types": ["node"],
+    "skipLibCheck": true
   },
   "include": ["vite.config.ts", "eslint.config.js"]
 }
