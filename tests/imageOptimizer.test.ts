@@ -1,3 +1,4 @@
+import { deflate, inflate } from 'pako'
 import { describe, expect, it } from 'vitest'
 import { optimizeImage } from '../src/utils/imageOptimizer'
 
@@ -26,6 +27,25 @@ describe('optimizeImage', () => {
     expect(new TextDecoder('latin1').decode(result.bytes)).toContain('iCCP')
     expect(new TextDecoder('latin1').decode(result.bytes)).toContain('IDAT')
     expect(result.removedMetadata).toBe(1)
+  })
+
+  it('losslessly recompresses inefficient PNG image data', () => {
+    const scanlines = new Uint8Array(16_384).fill(0)
+    const storedImageData = deflate(scanlines, { level: 0 })
+    const source = concat(
+      [137, 80, 78, 71, 13, 10, 26, 10],
+      pngChunk('IHDR', new Array(13).fill(0)),
+      pngChunk('IDAT', [...storedImageData]),
+      pngChunk('IEND'),
+    )
+
+    const result = optimizeImage(source, 'image/png')
+    const idatOffset = new TextDecoder('latin1').decode(result.bytes).indexOf('IDAT')
+    const idatLength = new DataView(result.bytes.buffer, result.bytes.byteOffset + idatOffset - 4, 4).getUint32(0)
+    const optimizedImageData = result.bytes.slice(idatOffset + 4, idatOffset + 4 + idatLength)
+
+    expect(result.bytes.byteLength).toBeLessThan(source.byteLength)
+    expect(inflate(optimizedImageData)).toEqual(scanlines)
   })
 
   it('removes JPEG EXIF/comment segments without touching scan data', () => {

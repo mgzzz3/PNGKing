@@ -1,3 +1,5 @@
+import { deflate, inflate } from 'pako'
+
 export interface OptimizationResult {
   bytes: Uint8Array
   removedMetadata: number
@@ -22,25 +24,171 @@ function concat(parts: Uint8Array[]): Uint8Array {
   return output
 }
 
+interface PngChunk {
+  type: string
+  data: Uint8Array
+  bytes: Uint8Array
+}
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff
+  for (const byte of bytes) {
+    crc ^= byte
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1))
+  }
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+function createPngChunk(type: string, data: Uint8Array): Uint8Array {
+  const chunk = new Uint8Array(data.length + 12)
+  const view = new DataView(chunk.buffer)
+  view.setUint32(0, data.length)
+  for (let index = 0; index < 4; index += 1) chunk[4 + index] = type.charCodeAt(index)
+  chunk.set(data, 8)
+  view.setUint32(data.length + 8, crc32(chunk.subarray(4, data.length + 8)))
+  return chunk
+}
+
+function paethPredictor(left: number, above: number, upperLeft: number): number {
+  const estimate = left + above - upperLeft
+  const leftDistance = Math.abs(estimate - left)
+  const aboveDistance = Math.abs(estimate - above)
+  const upperLeftDistance = Math.abs(estimate - upperLeft)
+  if (leftDistance <= aboveDistance && leftDistance <= upperLeftDistance) return left
+  return aboveDistance <= upperLeftDistance ? above : upperLeft
+}
+
+function refilterPngScanlines(data: Uint8Array, header?: Uint8Array): Uint8Array {
+  if (!header || header.length !== 13 || header[12] !== 0) return data
+  const view = new DataView(header.buffer, header.byteOffset, header.byteLength)
+  const width = view.getUint32(0)
+  const height = view.getUint32(4)
+  const bitDepth = header[8] ?? 0
+  const colorType = header[9] ?? 0
+  const channels = new Map([[0, 1], [2, 3], [3, 1], [4, 2], [6, 4]]).get(colorType)
+  if (!width || !height || !channels || !bitDepth) return data
+
+  const rowLength = Math.ceil(width * channels * bitDepth / 8)
+  const bytesPerPixel = Math.max(1, Math.ceil(channels * bitDepth / 8))
+  if (data.length !== height * (rowLength + 1)) return data
+
+  const output = new Uint8Array(data.length)
+  let previous = new Uint8Array(rowLength)
+  for (let rowIndex = 0; rowIndex < height; rowIndex += 1) {
+    const inputOffset = rowIndex * (rowLength + 1)
+    const filterType = data[inputOffset] ?? 0
+    const filtered = data.subarray(inputOffset + 1, inputOffset + 1 + rowLength)
+    const current = new Uint8Array(rowLength)
+
+    for (let index = 0; index < rowLength; index += 1) {
+      const left = index >= bytesPerPixel ? current[index - bytesPerPixel]! : 0
+      const above = previous[index] ?? 0
+      const upperLeft = index >= bytesPerPixel ? previous[index - bytesPerPixel]! : 0
+      const value = filtered[index] ?? 0
+      if (filterType === 0) current[index] = value
+      else if (filterType === 1) current[index] = (value + left) & 0xff
+      else if (filterType === 2) current[index] = (value + above) & 0xff
+      else if (filterType === 3) current[index] = (value + Math.floor((left + above) / 2)) & 0xff
+      else if (filterType === 4) current[index] = (value + paethPredictor(left, above, upperLeft)) & 0xff
+      else return data
+    }
+
+    let bestType = 0
+    let bestScore = Number.POSITIVE_INFINITY
+    let bestRow = current
+    for (let candidateType = 0; candidateType <= 4; candidateType += 1) {
+      const candidate = new Uint8Array(rowLength)
+      let score = 0
+      for (let index = 0; index < rowLength; index += 1) {
+        const left = index >= bytesPerPixel ? current[index - bytesPerPixel]! : 0
+        const above = previous[index] ?? 0
+        const upperLeft = index >= bytesPerPixel ? previous[index - bytesPerPixel]! : 0
+        let predictor = 0
+        if (candidateType === 1) predictor = left
+        else if (candidateType === 2) predictor = above
+        else if (candidateType === 3) predictor = Math.floor((left + above) / 2)
+        else if (candidateType === 4) predictor = paethPredictor(left, above, upperLeft)
+        const value = ((current[index] ?? 0) - predictor) & 0xff
+        candidate[index] = value
+        score += Math.abs(value < 128 ? value : value - 256)
+      }
+      if (score < bestScore) {
+        bestType = candidateType
+        bestScore = score
+        bestRow = candidate
+      }
+    }
+
+    output[inputOffset] = bestType
+    output.set(bestRow, inputOffset + 1)
+    previous = current
+  }
+  return output
+}
+
 function optimizePng(bytes: Uint8Array): OptimizationResult {
-  if (bytes.length < PNG_SIGNATURE_LENGTH) return { bytes, removedMetadata: 0 }
-  const parts = [bytes.slice(0, PNG_SIGNATURE_LENGTH)]
+  const signature = [137, 80, 78, 71, 13, 10, 26, 10]
+  if (bytes.length < PNG_SIGNATURE_LENGTH || signature.some((byte, index) => bytes[index] !== byte)) {
+    return { bytes, removedMetadata: 0 }
+  }
+
+  const chunks: PngChunk[] = []
   let offset = PNG_SIGNATURE_LENGTH
-  let removedMetadata = 0
+  let reachedEnd = false
 
   while (offset + 12 <= bytes.length) {
-    const view = new DataView(bytes.buffer, bytes.byteOffset + offset)
-    const dataLength = view.getUint32(0)
+    const dataLength = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0)
     const chunkLength = dataLength + 12
     if (offset + chunkLength > bytes.length) return { bytes, removedMetadata: 0 }
     const type = ascii(bytes, offset + 4, 4)
-    if (PNG_REMOVABLE.has(type)) removedMetadata += 1
-    else parts.push(bytes.slice(offset, offset + chunkLength))
+    chunks.push({
+      type,
+      data: bytes.slice(offset + 8, offset + 8 + dataLength),
+      bytes: bytes.slice(offset, offset + chunkLength),
+    })
     offset += chunkLength
-    if (type === 'IEND') break
+    if (type === 'IEND') {
+      reachedEnd = true
+      break
+    }
   }
 
-  return { bytes: removedMetadata ? concat(parts) : bytes, removedMetadata }
+  if (!reachedEnd) return { bytes, removedMetadata: 0 }
+
+  const removedMetadata = chunks.filter((chunk) => PNG_REMOVABLE.has(chunk.type)).length
+  const retainedChunks = chunks.filter((chunk) => !PNG_REMOVABLE.has(chunk.type))
+  const metadataOptimized = concat([
+    bytes.slice(0, PNG_SIGNATURE_LENGTH),
+    ...retainedChunks.map((chunk) => chunk.bytes),
+  ])
+  let best = metadataOptimized.length < bytes.length ? metadataOptimized : bytes
+
+  const imageData = retainedChunks.filter((chunk) => chunk.type === 'IDAT').map((chunk) => chunk.data)
+  if (imageData.length) {
+    try {
+      const inflated = inflate(concat(imageData))
+      const header = retainedChunks.find((chunk) => chunk.type === 'IHDR')?.data
+      const recompressedData = deflate(refilterPngScanlines(inflated, header), { level: 9 })
+      const recompressedChunks: Uint8Array[] = []
+      let wroteImageData = false
+      for (const chunk of retainedChunks) {
+        if (chunk.type === 'IDAT') {
+          if (!wroteImageData) {
+            recompressedChunks.push(createPngChunk('IDAT', recompressedData))
+            wroteImageData = true
+          }
+        } else {
+          recompressedChunks.push(chunk.bytes)
+        }
+      }
+      const recompressed = concat([bytes.slice(0, PNG_SIGNATURE_LENGTH), ...recompressedChunks])
+      if (recompressed.length < best.length) best = recompressed
+    } catch {
+      // Invalid or unsupported image data still benefits from safe metadata removal.
+    }
+  }
+
+  return { bytes: best, removedMetadata: best === bytes ? 0 : removedMetadata }
 }
 
 function optimizeJpeg(bytes: Uint8Array): OptimizationResult {
