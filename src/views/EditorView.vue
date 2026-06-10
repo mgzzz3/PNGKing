@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useFileDialog } from '@vueuse/core'
 import { ElMessage } from 'element-plus'
+import { onBeforeUnmount, watch } from 'vue'
 import JSZip from 'jszip'
 import { useImagesStore } from '@/stores/images'
 import { formatBytes, optimizedFilename } from '@/utils/format'
@@ -26,14 +27,32 @@ function redo() {
 }
 
 let settingsVersion = 0
-async function applySettings() {
-  const version = ++settingsVersion
+let settingsTimer: number | undefined
+
+async function applySettings(version: number) {
   const results = await store.reprocessAll()
   if (version !== settingsVersion) return
   const failures = results.filter((result) => !result).length
   if (failures) ElMessage.warning(`${failures} 张图片无法达到所选目标大小，已终止对应压缩`)
   else ElMessage.success('已按新设置重新压缩')
 }
+
+watch(
+  () => [store.compressionStrength, store.targetSize] as const,
+  () => {
+    const version = ++settingsVersion
+    if (settingsTimer !== undefined) window.clearTimeout(settingsTimer)
+    settingsTimer = window.setTimeout(() => {
+      settingsTimer = undefined
+      void applySettings(version)
+    }, 150)
+  },
+  { flush: 'post' },
+)
+
+onBeforeUnmount(() => {
+  if (settingsTimer !== undefined) window.clearTimeout(settingsTimer)
+})
 
 async function downloadAll() {
   const completed = store.items.filter((item) => item.status === 'done' && item.result)
@@ -81,12 +100,12 @@ async function downloadAll() {
         </div>
         <div class="setting-control strength-control" :class="{ disabled: store.targetSize > 0 }">
           <div class="setting-label"><label for="compression-strength">压缩强度</label><strong>{{ store.compressionStrength }}</strong></div>
-          <input id="compression-strength" v-model.number="store.compressionStrength" type="range" min="1" max="9" step="1" :disabled="store.targetSize > 0" @change="applySettings" />
+          <input id="compression-strength" v-model.number="store.compressionStrength" type="range" min="1" max="9" step="1" :disabled="store.targetSize > 0" />
           <div class="range-labels"><span>画质优先</span><span>默认 6</span><span>体积优先</span></div>
         </div>
         <div class="setting-control">
           <div class="setting-label"><label for="target-size">目标文件大小</label><small>每张图片</small></div>
-          <select id="target-size" v-model.number="store.targetSize" @change="applySettings">
+          <select id="target-size" v-model.number="store.targetSize">
             <option :value="0">不指定（按压缩强度）</option>
             <option :value="50 * 1024">50 KB</option>
             <option :value="100 * 1024">100 KB</option>
