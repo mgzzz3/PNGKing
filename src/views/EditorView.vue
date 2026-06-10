@@ -49,7 +49,7 @@ async function downloadAll() {
   <div class="editor-view">
     <div v-if="store.items.length" class="editor-content">
       <section class="editor-heading">
-        <div><span class="section-kicker">优化队列</span><h1>让图片轻装上阵</h1><p>像素保持原样，只清理不必要的元数据。</p></div>
+        <div><span class="section-kicker">优化队列</span><h1>让图片轻装上阵</h1><p>像素保持原样，智能重压缩并清理冗余元数据。</p></div>
         <el-button class="add-more" size="large" @click="open()"><IconBase name="plus" />继续添加</el-button>
       </section>
 

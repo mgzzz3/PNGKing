@@ -66,7 +66,8 @@ export const useImagesStore = defineStore('images', () => {
       })
     }
     items.value.push(...accepted)
-    for (const item of accepted) void processItem(item)
+    const acceptedIds = new Set(accepted.map((item) => item.id))
+    for (const item of items.value.filter(({ id }) => acceptedIds.has(id))) void processItem(item)
     return { accepted: accepted.length, rejected }
   }
 
