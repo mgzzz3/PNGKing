@@ -2,6 +2,14 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { optimizeImage } from '@/utils/imageOptimizer'
 import { formatSaving } from '@/utils/format'
+import {
+  bytesToKilobytes,
+  fileFormat,
+  formatsSummary,
+  savingPercent,
+  trackEvent,
+  type ImportSource,
+} from '@/utils/analytics'
 
 export type ImageStatus = 'queued' | 'processing' | 'done' | 'error'
 export type SortKey = 'name' | 'size' | 'saving'
@@ -16,6 +24,7 @@ export interface ImageItem {
   estimatedSize?: number | undefined
   removedMetadata: number
   error?: string | undefined
+  importSource: ImportSource
 }
 
 interface UndoEntry {
@@ -50,16 +59,20 @@ export const useImagesStore = defineStore('images', () => {
     return `${file.name}:${file.size}:${file.lastModified}`
   }
 
-  function addFiles(files: File[]) {
+  function addFiles(files: File[], source: ImportSource = 'file_picker') {
     const existing = new Set(items.value.map(({ file }) => fileKey(file)))
     const accepted: ImageItem[] = []
     const rejected: File[] = []
+    let duplicateCount = 0
     for (const file of files) {
       if (!SUPPORTED_TYPES.has(file.type)) {
         rejected.push(file)
         continue
       }
-      if (existing.has(fileKey(file))) continue
+      if (existing.has(fileKey(file))) {
+        duplicateCount += 1
+        continue
+      }
       existing.add(fileKey(file))
       accepted.push({
         id: crypto.randomUUID(),
@@ -68,25 +81,37 @@ export const useImagesStore = defineStore('images', () => {
         status: 'queued',
         optimizedSize: file.size,
         removedMetadata: 0,
+        importSource: source,
       })
     }
     items.value.push(...accepted)
     const acceptedIds = new Set(accepted.map((item) => item.id))
     for (const item of items.value.filter(({ id }) => acceptedIds.has(id))) void processItem(item)
-    return { accepted: accepted.length, rejected }
+    trackEvent('file_import', {
+      import_source: source,
+      selected_count: files.length,
+      accepted_count: accepted.length,
+      rejected_count: rejected.length,
+      duplicate_count: duplicateCount,
+      selected_kb: bytesToKilobytes(files.reduce((sum, file) => sum + file.size, 0)),
+      file_formats: formatsSummary(files),
+      queue_count: items.value.length,
+    })
+    return { accepted: accepted.length, rejected, duplicateCount }
   }
 
-  async function processItem(item: ImageItem) {
+  async function processItem(item: ImageItem, reason: 'initial' | 'settings_change' = 'initial') {
+    const startedAt = Date.now()
     const version = (processingVersions.get(item.id) ?? 0) + 1
     processingVersions.set(item.id, version)
     item.status = 'processing'
     item.error = undefined
     item.result = undefined
     item.estimatedSize = undefined
+    const settings = targetSize.value
+      ? { strength: compressionStrength.value, targetSize: targetSize.value }
+      : { strength: compressionStrength.value }
     try {
-      const settings = targetSize.value
-        ? { strength: compressionStrength.value, targetSize: targetSize.value }
-        : { strength: compressionStrength.value }
       const source = new Uint8Array(await item.file.arrayBuffer())
       const optimized = optimizeImage(source, item.file.type, settings)
       if (processingVersions.get(item.id) !== version) return false
@@ -97,6 +122,7 @@ export const useImagesStore = defineStore('images', () => {
         item.status = 'error'
         item.optimizedSize = item.file.size
         item.error = `无法压缩到目标大小，最小约 ${formatSize(optimized.smallestSize ?? item.file.size)}`
+        trackOptimization(item, 'target_unreachable', reason, startedAt, settings, optimized.smallestSize)
         return false
       }
       const useOptimized = optimized.bytes.byteLength < source.byteLength
@@ -107,14 +133,40 @@ export const useImagesStore = defineStore('images', () => {
       item.estimatedSize = undefined
       item.removedMetadata = useOptimized ? optimized.removedMetadata : 0
       item.status = 'done'
+      trackOptimization(item, 'success', reason, startedAt, settings)
       return true
     } catch (error) {
       if (processingVersions.get(item.id) !== version) return false
       item.estimatedSize = undefined
       item.status = 'error'
       item.error = error instanceof Error ? error.message : '处理失败'
+      trackOptimization(item, 'processing_error', reason, startedAt, settings)
       return false
     }
+  }
+
+  function trackOptimization(
+    item: ImageItem,
+    outcome: 'success' | 'target_unreachable' | 'processing_error',
+    reason: 'initial' | 'settings_change',
+    startedAt: number,
+    settings: { strength: number; targetSize?: number },
+    smallestSize?: number,
+  ) {
+    const resultSize = item.result?.size ?? smallestSize ?? item.file.size
+    trackEvent('optimization_result', {
+      outcome,
+      processing_reason: reason,
+      import_source: item.importSource,
+      file_format: fileFormat(item.file),
+      original_kb: bytesToKilobytes(item.file.size),
+      result_kb: bytesToKilobytes(resultSize),
+      saving_percent: savingPercent(item.file.size, resultSize),
+      compression_mode: settings.targetSize ? 'target_size' : 'strength',
+      compression_strength: settings.targetSize ? undefined : settings.strength,
+      target_kb: settings.targetSize ? bytesToKilobytes(settings.targetSize) : undefined,
+      duration_ms: Date.now() - startedAt,
+    })
   }
 
   function formatSize(bytes: number) {
@@ -123,7 +175,7 @@ export const useImagesStore = defineStore('images', () => {
   }
 
   async function reprocessAll() {
-    return Promise.all(items.value.map((item) => processItem(item)))
+    return Promise.all(items.value.map((item) => processItem(item, 'settings_change')))
   }
 
   function removeItem(id: string) {
@@ -133,6 +185,11 @@ export const useImagesStore = defineStore('images', () => {
     const removed = items.value.splice(index, 1)
     const item = removed[0]
     if (item) {
+      trackEvent('queue_item_removed', {
+        file_format: fileFormat(item.file),
+        item_status: item.status,
+        queue_count: items.value.length,
+      })
       undoStack.value.push({ items: [item], indexes: [index] })
       redoStack.value = []
     }
@@ -140,6 +197,12 @@ export const useImagesStore = defineStore('images', () => {
 
   function clearAll() {
     if (!items.value.length) return
+    trackEvent('queue_cleared', {
+      removed_count: items.value.length,
+      completed_count: completedCount.value,
+      failed_count: failedCount.value,
+      file_formats: formatsSummary(items.value.map((item) => item.file)),
+    })
     for (const item of items.value) processingVersions.set(item.id, (processingVersions.get(item.id) ?? 0) + 1)
     undoStack.value.push({ items: [...items.value], indexes: items.value.map((_, index) => index) })
     redoStack.value = []
@@ -151,6 +214,7 @@ export const useImagesStore = defineStore('images', () => {
     if (!entry) return false
     entry.items.forEach((item, index) => items.value.splice(entry.indexes[index] ?? items.value.length, 0, item))
     redoStack.value.push(entry)
+    trackEvent('queue_history_action', { action: 'undo', affected_count: entry.items.length, queue_count: items.value.length })
     return true
   }
 
@@ -160,6 +224,7 @@ export const useImagesStore = defineStore('images', () => {
     const removedIds = new Set(entry.items.map((item) => item.id))
     items.value = items.value.filter((item) => !removedIds.has(item.id))
     undoStack.value.push(entry)
+    trackEvent('queue_history_action', { action: 'redo', affected_count: entry.items.length, queue_count: items.value.length })
     return true
   }
 

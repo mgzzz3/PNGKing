@@ -5,12 +5,13 @@ import { useImagesStore } from '@/stores/images'
 import DropZone from '@/components/DropZone.vue'
 import FeatureCard from '@/components/FeatureCard.vue'
 import IconBase from '@/components/IconBase.vue'
+import type { ImportSource } from '@/utils/analytics'
 
 const router = useRouter()
 const store = useImagesStore()
 
-function handleFiles(files: File[]) {
-  const { accepted, rejected } = store.addFiles(files)
+function handleFiles(files: File[], source: ImportSource) {
+  const { accepted, rejected } = store.addFiles(files, source)
   if (rejected.length) ElMessage.warning(`有 ${rejected.length} 个文件格式不受支持`)
   if (accepted) void router.push('/editor')
 }

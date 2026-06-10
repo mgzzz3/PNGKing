@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import type { ImageItem } from '@/stores/images'
 import { formatBytes, formatSaving, optimizedFilename } from '@/utils/format'
+import { bytesToKilobytes, fileFormat, savingPercent, trackEvent } from '@/utils/analytics'
 import IconBase from './IconBase.vue'
 
 const props = defineProps<{ item: ImageItem }>()
@@ -15,6 +16,12 @@ function download() {
   anchor.href = url
   anchor.download = optimizedFilename(props.item.file.name)
   anchor.click()
+  trackEvent('single_image_download', {
+    file_format: fileFormat(props.item.file),
+    original_kb: bytesToKilobytes(props.item.file.size),
+    optimized_kb: bytesToKilobytes(props.item.result.size),
+    saving_percent: savingPercent(props.item.file.size, props.item.result.size),
+  })
   URL.revokeObjectURL(url)
 }
 </script>
