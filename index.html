@@ -24,5 +24,22 @@
   <body>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
+      import { getAnalytics } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-analytics.js";
+
+      const firebaseConfig = {
+        apiKey: "AIzaSyDXtGSw70JpwJ3bIZHDRwlqOM9t4BKjB6U",
+        authDomain: "pngking-1e613.firebaseapp.com",
+        projectId: "pngking-1e613",
+        storageBucket: "pngking-1e613.firebasestorage.app",
+        messagingSenderId: "634561159597",
+        appId: "1:634561159597:web:05beccc3afde9547ed0124",
+        measurementId: "G-488C4BYPM1",
+      };
+
+      const app = initializeApp(firebaseConfig);
+      getAnalytics(app);
+    </script>
   </body>
 </html>
