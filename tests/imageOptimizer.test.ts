@@ -48,6 +48,60 @@ describe('optimizeImage', () => {
     expect(inflate(optimizedImageData)).toEqual(scanlines)
   })
 
+  it('converts truecolor PNGs to an adaptive indexed palette for substantially smaller files', () => {
+    const width = 256
+    const height = 256
+    const scanlines = new Uint8Array(height * (width * 4 + 1))
+    let state = 0x12345678
+    for (let row = 0; row < height; row += 1) {
+      const rowOffset = row * (width * 4 + 1)
+      for (let column = 0; column < width; column += 1) {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0
+        const offset = rowOffset + 1 + column * 4
+        scanlines[offset] = (state >>> 16) & 0xf8
+        scanlines[offset + 1] = (state >>> 8) & 0xf8
+        scanlines[offset + 2] = state & 0xf8
+        scanlines[offset + 3] = 255
+      }
+    }
+    const header = [...u32be(width), ...u32be(height), 8, 6, 0, 0, 0]
+    const source = concat(
+      [137, 80, 78, 71, 13, 10, 26, 10],
+      pngChunk('IHDR', header),
+      pngChunk('IDAT', [...deflate(scanlines, { level: 9 })]),
+      pngChunk('IEND'),
+    )
+
+    const result = optimizeImage(source, 'image/png')
+    const output = new TextDecoder('latin1').decode(result.bytes)
+    const headerOffset = output.indexOf('IHDR')
+
+    expect(result.bytes.byteLength).toBeLessThan(source.byteLength * 0.55)
+    expect(result.bytes[headerOffset + 4 + 9]).toBe(3)
+    expect(output).toContain('PLTE')
+  })
+
+  it('keeps animated PNG image data on the lossless path', () => {
+    const width = 2
+    const height = 1
+    const scanlines = new Uint8Array([0, 255, 0, 0, 255, 0, 255, 0, 255])
+    const header = [...u32be(width), ...u32be(height), 8, 6, 0, 0, 0]
+    const source = concat(
+      [137, 80, 78, 71, 13, 10, 26, 10],
+      pngChunk('IHDR', header),
+      pngChunk('acTL', [...u32be(1), ...u32be(0)]),
+      pngChunk('IDAT', [...deflate(scanlines, { level: 0 })]),
+      pngChunk('IEND'),
+    )
+
+    const result = optimizeImage(source, 'image/png')
+    const output = new TextDecoder('latin1').decode(result.bytes)
+    const headerOffset = output.indexOf('IHDR')
+
+    expect(result.bytes[headerOffset + 4 + 9]).toBe(6)
+    expect(output).not.toContain('PLTE')
+  })
+
   it('removes JPEG EXIF/comment segments without touching scan data', () => {
     const source = concat(
       [0xff, 0xd8],

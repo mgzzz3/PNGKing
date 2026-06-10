@@ -126,6 +126,248 @@ function refilterPngScanlines(data: Uint8Array, header?: Uint8Array): Uint8Array
   return output
 }
 
+
+interface QuantizedColor {
+  red: number
+  green: number
+  blue: number
+  alpha: number
+  count: number
+}
+
+interface ColorBox {
+  colors: QuantizedColor[]
+  score: number
+}
+
+function decodePngPixels(data: Uint8Array, width: number, height: number, channels: number): Uint8Array | undefined {
+  const rowLength = width * channels
+  if (data.length !== height * (rowLength + 1)) return undefined
+  const pixels = new Uint8Array(width * height * channels)
+  let previous = new Uint8Array(rowLength)
+
+  for (let rowIndex = 0; rowIndex < height; rowIndex += 1) {
+    const inputOffset = rowIndex * (rowLength + 1)
+    const outputOffset = rowIndex * rowLength
+    const filterType = data[inputOffset]
+    if (filterType === undefined || filterType > 4) return undefined
+    const current = pixels.subarray(outputOffset, outputOffset + rowLength)
+
+    for (let index = 0; index < rowLength; index += 1) {
+      const left = index >= channels ? current[index - channels]! : 0
+      const above = previous[index] ?? 0
+      const upperLeft = index >= channels ? previous[index - channels]! : 0
+      let predictor = 0
+      if (filterType === 1) predictor = left
+      else if (filterType === 2) predictor = above
+      else if (filterType === 3) predictor = Math.floor((left + above) / 2)
+      else if (filterType === 4) predictor = paethPredictor(left, above, upperLeft)
+      current[index] = ((data[inputOffset + 1 + index] ?? 0) + predictor) & 0xff
+    }
+    previous = current
+  }
+
+  return pixels
+}
+
+function colorBox(colors: QuantizedColor[]): ColorBox {
+  let minRed = 255
+  let minGreen = 255
+  let minBlue = 255
+  let minAlpha = 255
+  let maxRed = 0
+  let maxGreen = 0
+  let maxBlue = 0
+  let maxAlpha = 0
+  let population = 0
+  for (const color of colors) {
+    minRed = Math.min(minRed, color.red)
+    minGreen = Math.min(minGreen, color.green)
+    minBlue = Math.min(minBlue, color.blue)
+    minAlpha = Math.min(minAlpha, color.alpha)
+    maxRed = Math.max(maxRed, color.red)
+    maxGreen = Math.max(maxGreen, color.green)
+    maxBlue = Math.max(maxBlue, color.blue)
+    maxAlpha = Math.max(maxAlpha, color.alpha)
+    population += color.count
+  }
+  const range = Math.max(maxRed - minRed, maxGreen - minGreen, maxBlue - minBlue, (maxAlpha - minAlpha) * 2)
+  return { colors, score: range * Math.sqrt(population) }
+}
+
+function splitColorBox(box: ColorBox): [ColorBox, ColorBox] | undefined {
+  if (box.colors.length < 2) return undefined
+  const channels = ['red', 'green', 'blue', 'alpha'] as const
+  let splitChannel: typeof channels[number] = 'red'
+  let largestRange = -1
+  for (const channel of channels) {
+    let minimum = 255
+    let maximum = 0
+    for (const color of box.colors) {
+      minimum = Math.min(minimum, color[channel])
+      maximum = Math.max(maximum, color[channel])
+    }
+    const range = (maximum - minimum) * (channel === 'alpha' ? 2 : 1)
+    if (range > largestRange) {
+      largestRange = range
+      splitChannel = channel
+    }
+  }
+
+  const sorted = [...box.colors].sort((left, right) => left[splitChannel] - right[splitChannel])
+  const population = sorted.reduce((sum, color) => sum + color.count, 0)
+  let cumulative = 0
+  let splitIndex = 1
+  for (; splitIndex < sorted.length; splitIndex += 1) {
+    cumulative += sorted[splitIndex - 1]!.count
+    if (cumulative >= population / 2) break
+  }
+  return [colorBox(sorted.slice(0, splitIndex)), colorBox(sorted.slice(splitIndex))]
+}
+
+function createPalette(pixels: Uint8Array, channels: number, maximumColors = 256) {
+  const histogram = new Map<number, QuantizedColor>()
+  for (let offset = 0; offset < pixels.length; offset += channels) {
+    const alpha = channels === 4 ? pixels[offset + 3]! : 255
+    const red = alpha === 0 ? 0 : pixels[offset]!
+    const green = alpha === 0 ? 0 : pixels[offset + 1]!
+    const blue = alpha === 0 ? 0 : pixels[offset + 2]!
+    const key = ((red >> 3) << 14) | ((green >> 3) << 9) | ((blue >> 3) << 4) | (alpha >> 4)
+    const existing = histogram.get(key)
+    if (existing) {
+      const count = existing.count + 1
+      existing.red += (red - existing.red) / count
+      existing.green += (green - existing.green) / count
+      existing.blue += (blue - existing.blue) / count
+      existing.alpha += (alpha - existing.alpha) / count
+      existing.count = count
+    } else {
+      histogram.set(key, { red, green, blue, alpha, count: 1 })
+    }
+  }
+
+  const boxes = [colorBox([...histogram.values()])]
+  while (boxes.length < maximumColors) {
+    boxes.sort((left, right) => right.score - left.score)
+    const index = boxes.findIndex((box) => box.colors.length > 1)
+    if (index < 0) break
+    const split = splitColorBox(boxes[index]!)
+    if (!split) break
+    boxes.splice(index, 1, ...split)
+  }
+
+  const palette = boxes.map((box) => {
+    let population = 0
+    let red = 0
+    let green = 0
+    let blue = 0
+    let alpha = 0
+    for (const color of box.colors) {
+      population += color.count
+      red += color.red * color.count
+      green += color.green * color.count
+      blue += color.blue * color.count
+      alpha += color.alpha * color.count
+    }
+    return {
+      red: Math.round(red / population),
+      green: Math.round(green / population),
+      blue: Math.round(blue / population),
+      alpha: Math.round(alpha / population),
+    }
+  })
+
+  const lookup = new Map<number, number>()
+  for (const [key, color] of histogram) {
+    let bestIndex = 0
+    let bestDistance = Number.POSITIVE_INFINITY
+    for (let index = 0; index < palette.length; index += 1) {
+      const candidate = palette[index]!
+      const redDistance = color.red - candidate.red
+      const greenDistance = color.green - candidate.green
+      const blueDistance = color.blue - candidate.blue
+      const alphaDistance = color.alpha - candidate.alpha
+      const distance = redDistance * redDistance * 2 + greenDistance * greenDistance * 4
+        + blueDistance * blueDistance + alphaDistance * alphaDistance * 4
+      if (distance < bestDistance) {
+        bestDistance = distance
+        bestIndex = index
+      }
+    }
+    lookup.set(key, bestIndex)
+  }
+
+  return { palette, lookup }
+}
+
+function quantizePng(chunks: PngChunk[], inflated: Uint8Array): Uint8Array | undefined {
+  const headerChunk = chunks.find((chunk) => chunk.type === 'IHDR')
+  if (!headerChunk || headerChunk.data.length !== 13 || chunks.some((chunk) => chunk.type === 'acTL')) return undefined
+  const header = headerChunk.data
+  const view = new DataView(header.buffer, header.byteOffset, header.byteLength)
+  const width = view.getUint32(0)
+  const height = view.getUint32(4)
+  const bitDepth = header[8]
+  const colorType = header[9]
+  const interlace = header[12]
+  if (!width || !height || bitDepth !== 8 || interlace !== 0 || (colorType !== 2 && colorType !== 6)) return undefined
+
+  const channels = colorType === 6 ? 4 : 3
+  const pixels = decodePngPixels(inflated, width, height, channels)
+  if (!pixels) return undefined
+  const { palette, lookup } = createPalette(pixels, channels)
+  if (!palette.length) return undefined
+
+  const scanlines = new Uint8Array(height * (width + 1))
+  for (let row = 0; row < height; row += 1) {
+    const scanlineOffset = row * (width + 1)
+    const pixelOffset = row * width * channels
+    scanlines[scanlineOffset] = 0
+    for (let column = 0; column < width; column += 1) {
+      const offset = pixelOffset + column * channels
+      const alpha = channels === 4 ? pixels[offset + 3]! : 255
+      const red = alpha === 0 ? 0 : pixels[offset]!
+      const green = alpha === 0 ? 0 : pixels[offset + 1]!
+      const blue = alpha === 0 ? 0 : pixels[offset + 2]!
+      const key = ((red >> 3) << 14) | ((green >> 3) << 9) | ((blue >> 3) << 4) | (alpha >> 4)
+      scanlines[scanlineOffset + column + 1] = lookup.get(key) ?? 0
+    }
+  }
+
+  const paletteData = new Uint8Array(palette.length * 3)
+  const alphaData = new Uint8Array(palette.length)
+  let lastTransparent = -1
+  palette.forEach((color, index) => {
+    paletteData[index * 3] = color.red
+    paletteData[index * 3 + 1] = color.green
+    paletteData[index * 3 + 2] = color.blue
+    alphaData[index] = color.alpha
+    if (color.alpha !== 255) lastTransparent = index
+  })
+
+  const indexedHeader = header.slice()
+  indexedHeader[9] = 3
+  const compressed = deflate(refilterPngScanlines(scanlines, indexedHeader), { level: 9 })
+  const incompatibleChunks = new Set(['IDAT', 'PLTE', 'tRNS', 'hIST', 'bKGD', 'sBIT'])
+  const output: Uint8Array[] = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])]
+  let wrotePalette = false
+  for (const chunk of chunks) {
+    if (chunk.type === 'IHDR') {
+      output.push(createPngChunk('IHDR', indexedHeader))
+      continue
+    }
+    if (chunk.type === 'IDAT' && !wrotePalette) {
+      output.push(createPngChunk('PLTE', paletteData))
+      if (lastTransparent >= 0) output.push(createPngChunk('tRNS', alphaData.slice(0, lastTransparent + 1)))
+      output.push(createPngChunk('IDAT', compressed))
+      wrotePalette = true
+      continue
+    }
+    if (!incompatibleChunks.has(chunk.type)) output.push(chunk.bytes)
+  }
+  return wrotePalette ? concat(output) : undefined
+}
+
 function optimizePng(bytes: Uint8Array): OptimizationResult {
   const signature = [137, 80, 78, 71, 13, 10, 26, 10]
   if (bytes.length < PNG_SIGNATURE_LENGTH || signature.some((byte, index) => bytes[index] !== byte)) {
@@ -183,6 +425,9 @@ function optimizePng(bytes: Uint8Array): OptimizationResult {
       }
       const recompressed = concat([bytes.slice(0, PNG_SIGNATURE_LENGTH), ...recompressedChunks])
       if (recompressed.length < best.length) best = recompressed
+
+      const quantized = quantizePng(retainedChunks, inflated)
+      if (quantized && quantized.length < best.length) best = quantized
     } catch {
       // Invalid or unsupported image data still benefits from safe metadata removal.
     }

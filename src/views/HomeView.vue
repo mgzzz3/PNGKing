@@ -20,14 +20,14 @@ function handleFiles(files: File[]) {
   <div class="home-view">
     <section class="hero-section">
       <div class="eyebrow"><IconBase name="lock" />无需上传 · 隐私安全</div>
-      <h1>图片瘦身，<em>画质不打折</em></h1>
-      <p class="hero-copy">真正的无损优化，不改变任何像素。一次处理所有图片，轻一点，快很多。</p>
+      <h1>图片瘦身，<em>观感不打折</em></h1>
+      <p class="hero-copy">智能颜色量化与无损重压缩协同工作。一次处理所有图片，轻一点，快很多。</p>
       <DropZone @files="handleFiles" />
       <p class="privacy-line"><IconBase name="shield" />文件始终留在你的设备上，我们看不到任何内容</p>
     </section>
 
     <section class="features" aria-label="产品特点">
-      <FeatureCard icon="shield" tone="green" title="真正无损" description="保留每一个像素，重压缩数据并移除冗余信息。" />
+      <FeatureCard icon="shield" tone="green" title="智能压缩" description="自适应减少肉眼难辨的颜色，并重压缩数据、移除冗余信息。" />
       <FeatureCard icon="bolt" tone="yellow" title="本地极速" description="无需等待上传，浏览器直接处理，速度取决于你的设备。" />
       <FeatureCard icon="layers" tone="purple" title="批量处理" description="一次拖入多张图片，完成后打包下载，工作更高效。" />
     </section>
