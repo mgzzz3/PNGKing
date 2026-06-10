@@ -439,17 +439,34 @@ function optimizePng(bytes: Uint8Array, options: OptimizationOptions): Optimizat
 
       const targetSize = options.targetSize
       if (targetSize !== undefined) {
-        const candidates = [bytes, metadataOptimized, recompressed]
+        interface TargetCandidate {
+          bytes: Uint8Array
+          paletteColors: number
+        }
+
+        const candidates: TargetCandidate[] = [
+          { bytes, paletteColors: Number.POSITIVE_INFINITY },
+          { bytes: metadataOptimized, paletteColors: Number.POSITIVE_INFINITY },
+          { bytes: recompressed, paletteColors: Number.POSITIVE_INFINITY },
+        ]
         for (const maximumColors of TARGET_PALETTE_SIZES) {
           const quantized = quantizePng(retainedChunks, inflated, maximumColors)
-          if (quantized) candidates.push(quantized)
+          if (quantized) candidates.push({ bytes: quantized, paletteColors: maximumColors })
         }
-        const eligible = candidates.filter((candidate) => candidate.length <= targetSize)
-        const smallestSize = Math.min(...candidates.map((candidate) => candidate.length))
+        const eligible = candidates.filter((candidate) => candidate.bytes.length <= targetSize)
+        const smallestSize = Math.min(...candidates.map((candidate) => candidate.bytes.length))
         if (!eligible.length) {
           return { bytes, removedMetadata: 0, targetReached: false, smallestSize }
         }
-        best = eligible.reduce((closest, candidate) => candidate.length > closest.length ? candidate : closest)
+        // File size is not a reliable proxy for visual quality: a smaller palette can
+        // occasionally produce more bytes because its index stream compresses worse.
+        // Prefer the richest palette that meets the target, then the smallest lossless
+        // representation when candidates have the same quality.
+        best = eligible.reduce((highestQuality, candidate) => {
+          if (candidate.paletteColors > highestQuality.paletteColors) return candidate
+          if (candidate.paletteColors < highestQuality.paletteColors) return highestQuality
+          return candidate.bytes.length < highestQuality.bytes.length ? candidate : highestQuality
+        }).bytes
       } else {
         const strength = Math.min(9, Math.max(1, Math.round(options.strength ?? DEFAULT_STRENGTH)))
         const quantized = quantizePng(retainedChunks, inflated, STRENGTH_COLORS[strength]!)
