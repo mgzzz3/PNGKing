@@ -95,7 +95,7 @@ async function downloadAll() {
             <option :value="1024 * 1024">1 MB</option>
             <option :value="2 * 1024 * 1024">2 MB</option>
           </select>
-          <p>选择后会优先保留最接近且不超过目标的结果；无法达到时不会生成文件。</p>
+          <p>选择后会优先保留不超过目标且画质最高的结果；无法达到时不会生成文件。</p>
         </div>
       </section>
 

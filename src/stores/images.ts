@@ -84,10 +84,11 @@ export const useImagesStore = defineStore('images', () => {
     item.result = undefined
     item.estimatedSize = undefined
     try {
-      const source = new Uint8Array(await item.file.arrayBuffer())
-      const optimized = optimizeImage(source, item.file.type, targetSize.value
+      const settings = targetSize.value
         ? { strength: compressionStrength.value, targetSize: targetSize.value }
-        : { strength: compressionStrength.value })
+        : { strength: compressionStrength.value }
+      const source = new Uint8Array(await item.file.arrayBuffer())
+      const optimized = optimizeImage(source, item.file.type, settings)
       if (processingVersions.get(item.id) !== version) return false
       item.estimatedSize = optimized.targetReached === false ? optimized.smallestSize : optimized.bytes.byteLength
       await new Promise<void>((resolve) => window.setTimeout(resolve, 80))

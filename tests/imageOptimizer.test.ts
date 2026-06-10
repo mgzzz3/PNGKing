@@ -142,7 +142,7 @@ describe('optimizeImage', () => {
     expect(sizeFirst.bytes.byteLength).toBeLessThan(qualityFirst.bytes.byteLength)
   })
 
-  it('chooses the closest result below a target instead of the smallest result', () => {
+  it('chooses the highest-quality result below a target instead of the smallest result', () => {
     const width = 128
     const height = 128
     const scanlines = new Uint8Array(height * (width * 4 + 1))
