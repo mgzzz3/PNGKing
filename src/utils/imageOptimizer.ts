@@ -13,7 +13,7 @@ export interface OptimizationResult {
 }
 
 const DEFAULT_STRENGTH = 6
-const STRENGTH_COLORS = [256, 256, 224, 192, 160, 128, 96, 64, 32, 16]
+const STRENGTH_COLORS: ReadonlyArray<number | undefined> = [undefined, undefined, 224, 192, 160, 128, 96, 64, 32, 16]
 const TARGET_TRUECOLOR_BITS = [7, 6, 5, 4, 3, 2, 1]
 const TARGET_PALETTE_SIZES = [256, 224, 192, 160, 128, 96, 64, 48, 32, 24, 16, 12, 8, 4, 2]
 
@@ -523,10 +523,13 @@ function optimizePng(bytes: Uint8Array, options: OptimizationOptions): Optimizat
         }).bytes
       } else {
         const strength = Math.min(9, Math.max(1, Math.round(options.strength ?? DEFAULT_STRENGTH)))
-        const quantized = quantizePng(retainedChunks, inflated, STRENGTH_COLORS[strength]!)
-        // Strength is an explicit quality/size choice. Compare its palette result with
-        // the metadata-only source rather than silently replacing several lower levels
-        // with the same smallest lossless candidate.
+        const maximumColors = STRENGTH_COLORS[strength]
+        // Level 1 is the quality-first preset: keep every pixel unchanged and only use
+        // metadata removal plus lossless DEFLATE recompression. Levels 2-9 progressively
+        // reduce the palette, ending with the smallest 16-color preset at level 9.
+        const quantized = maximumColors === undefined
+          ? undefined
+          : quantizePng(retainedChunks, inflated, maximumColors)
         if (quantized && quantized.length < metadataOptimized.length) best = quantized
       }
     } catch {

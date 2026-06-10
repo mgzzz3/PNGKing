@@ -142,7 +142,7 @@ async function downloadAll() {
         <div class="setting-control strength-control" :class="{ disabled: store.targetSize > 0 }">
           <div class="setting-label"><label for="compression-strength">压缩强度</label><strong>{{ store.compressionStrength }}</strong></div>
           <input id="compression-strength" v-model.number="store.compressionStrength" type="range" min="1" max="9" step="1" :disabled="store.targetSize > 0" />
-          <div class="range-labels"><span>画质优先</span><span>默认 6</span><span>体积优先</span></div>
+          <div class="range-labels"><span>画质优先（1 级无损）</span><span>默认 6</span><span>体积优先</span></div>
         </div>
         <div class="setting-control">
           <div class="setting-label"><label for="target-size">目标文件大小</label><small>每张图片</small></div>
