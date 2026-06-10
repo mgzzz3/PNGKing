@@ -25,6 +25,16 @@ function redo() {
   if (store.redo()) ElMessage.success('已重做上一步操作')
 }
 
+let settingsVersion = 0
+async function applySettings() {
+  const version = ++settingsVersion
+  const results = await store.reprocessAll()
+  if (version !== settingsVersion) return
+  const failures = results.filter((result) => !result).length
+  if (failures) ElMessage.warning(`${failures} 张图片无法达到所选目标大小，已终止对应压缩`)
+  else ElMessage.success('已按新设置重新压缩')
+}
+
 async function downloadAll() {
   const completed = store.items.filter((item) => item.status === 'done' && item.result)
   if (!completed.length) return
@@ -62,6 +72,31 @@ async function downloadAll() {
         <div class="summary-arrow">→</div>
         <div class="summary-stat optimized"><small>优化之后</small><strong>{{ formatBytes(store.totalOptimized) }}</strong></div>
         <div class="saving-badge"><small>共节省</small><strong>{{ store.totalSaving }}%</strong></div>
+      </section>
+
+      <section class="compression-settings" aria-labelledby="compression-settings-title">
+        <div class="settings-heading">
+          <div><span class="settings-icon"><IconBase name="sliders" /></span><div><strong id="compression-settings-title">压缩设置</strong><small>修改后会自动重新处理当前队列</small></div></div>
+          <span class="local-badge">仅本地处理</span>
+        </div>
+        <div class="setting-control strength-control" :class="{ disabled: store.targetSize > 0 }">
+          <div class="setting-label"><label for="compression-strength">压缩强度</label><strong>{{ store.compressionStrength }}</strong></div>
+          <input id="compression-strength" v-model.number="store.compressionStrength" type="range" min="1" max="9" step="1" :disabled="store.targetSize > 0" @change="applySettings" />
+          <div class="range-labels"><span>画质优先</span><span>默认 6</span><span>体积优先</span></div>
+        </div>
+        <div class="setting-control">
+          <div class="setting-label"><label for="target-size">目标文件大小</label><small>每张图片</small></div>
+          <select id="target-size" v-model.number="store.targetSize" @change="applySettings">
+            <option :value="0">不指定（按压缩强度）</option>
+            <option :value="50 * 1024">50 KB</option>
+            <option :value="100 * 1024">100 KB</option>
+            <option :value="250 * 1024">250 KB</option>
+            <option :value="500 * 1024">500 KB</option>
+            <option :value="1024 * 1024">1 MB</option>
+            <option :value="2 * 1024 * 1024">2 MB</option>
+          </select>
+          <p>选择后会优先保留最接近且不超过目标的结果；无法达到时不会生成文件。</p>
+        </div>
       </section>
 
       <section class="queue-panel">

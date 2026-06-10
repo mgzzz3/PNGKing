@@ -28,4 +28,26 @@ describe('images store', () => {
     expect(store.items[0]?.result).toBeTruthy()
     vi.useRealTimers()
   })
+
+  it('shows an estimate while processing and stops when a target is unreachable', async () => {
+    vi.useFakeTimers()
+    const store = useImagesStore()
+    store.targetSize = 1
+    const file = new File([minimalPng], 'tiny-target.png', { type: 'image/png' })
+
+    store.addFiles([file])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(store.items[0]?.status).toBe('processing')
+    expect(store.items[0]?.estimatedSize).toBeGreaterThan(1)
+
+    await vi.advanceTimersByTimeAsync(100)
+
+    expect(store.items[0]?.status).toBe('error')
+    expect(store.items[0]?.result).toBeUndefined()
+    expect(store.items[0]?.error).toContain('无法压缩到目标大小')
+    vi.useRealTimers()
+  })
+
 })

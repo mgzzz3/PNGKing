@@ -116,6 +116,75 @@ describe('optimizeImage', () => {
     expect(result.removedMetadata).toBe(2)
   })
 
+  it('uses compression strength to trade palette detail for file size', () => {
+    const width = 128
+    const height = 128
+    const scanlines = new Uint8Array(height * (width * 4 + 1))
+    for (let row = 0; row < height; row += 1) {
+      for (let column = 0; column < width; column += 1) {
+        const offset = row * (width * 4 + 1) + 1 + column * 4
+        scanlines[offset] = column * 2
+        scanlines[offset + 1] = row * 2
+        scanlines[offset + 2] = (row * column) & 0xff
+        scanlines[offset + 3] = 255
+      }
+    }
+    const source = concat(
+      [137, 80, 78, 71, 13, 10, 26, 10],
+      pngChunk('IHDR', [...u32be(width), ...u32be(height), 8, 6, 0, 0, 0]),
+      pngChunk('IDAT', [...deflate(scanlines, { level: 0 })]),
+      pngChunk('IEND'),
+    )
+
+    const qualityFirst = optimizeImage(source, 'image/png', { strength: 1 })
+    const sizeFirst = optimizeImage(source, 'image/png', { strength: 9 })
+
+    expect(sizeFirst.bytes.byteLength).toBeLessThan(qualityFirst.bytes.byteLength)
+  })
+
+  it('chooses the closest result below a target instead of the smallest result', () => {
+    const width = 128
+    const height = 128
+    const scanlines = new Uint8Array(height * (width * 4 + 1))
+    for (let row = 0; row < height; row += 1) {
+      for (let column = 0; column < width; column += 1) {
+        const offset = row * (width * 4 + 1) + 1 + column * 4
+        scanlines[offset] = column * 2
+        scanlines[offset + 1] = row * 2
+        scanlines[offset + 2] = (row * column) & 0xff
+        scanlines[offset + 3] = 255
+      }
+    }
+    const source = concat(
+      [137, 80, 78, 71, 13, 10, 26, 10],
+      pngChunk('IHDR', [...u32be(width), ...u32be(height), 8, 6, 0, 0, 0]),
+      pngChunk('IDAT', [...deflate(scanlines, { level: 0 })]),
+      pngChunk('IEND'),
+    )
+    const qualityFirst = optimizeImage(source, 'image/png', { strength: 1 })
+    const smallest = optimizeImage(source, 'image/png', { strength: 9 })
+    const targeted = optimizeImage(source, 'image/png', { targetSize: qualityFirst.bytes.byteLength })
+
+    expect(targeted.targetReached).toBe(true)
+    expect(targeted.bytes.byteLength).toBe(qualityFirst.bytes.byteLength)
+    expect(targeted.bytes.byteLength).toBeGreaterThan(smallest.bytes.byteLength)
+  })
+
+  it('reports when the requested target size cannot be reached', () => {
+    const source = concat(
+      [137, 80, 78, 71, 13, 10, 26, 10],
+      pngChunk('IHDR', new Array(13).fill(0)),
+      pngChunk('IDAT', [1, 2, 3]),
+      pngChunk('IEND'),
+    )
+
+    const result = optimizeImage(source, 'image/png', { targetSize: 1 })
+
+    expect(result.targetReached).toBe(false)
+    expect(result.smallestSize).toBeGreaterThan(1)
+    expect(result.bytes).toBe(source)
+  })
+
   it('returns unsupported files unchanged', () => {
     const source = new Uint8Array([1, 2, 3])
     const result = optimizeImage(source, 'image/avif')

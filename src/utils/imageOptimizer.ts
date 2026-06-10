@@ -1,9 +1,20 @@
 import { deflate, inflate } from 'pako'
 
+export interface OptimizationOptions {
+  strength?: number
+  targetSize?: number
+}
+
 export interface OptimizationResult {
   bytes: Uint8Array
   removedMetadata: number
+  targetReached?: boolean
+  smallestSize?: number
 }
+
+const DEFAULT_STRENGTH = 6
+const STRENGTH_COLORS = [256, 256, 224, 192, 160, 128, 96, 64, 32, 16]
+const TARGET_PALETTE_SIZES = [256, 224, 192, 160, 128, 96, 64, 48, 32, 24, 16, 12, 8, 4, 2]
 
 const PNG_SIGNATURE_LENGTH = 8
 const PNG_REMOVABLE = new Set(['tEXt', 'zTXt', 'iTXt', 'eXIf', 'tIME'])
@@ -300,7 +311,7 @@ function createPalette(pixels: Uint8Array, channels: number, maximumColors = 256
   return { palette, lookup }
 }
 
-function quantizePng(chunks: PngChunk[], inflated: Uint8Array): Uint8Array | undefined {
+function quantizePng(chunks: PngChunk[], inflated: Uint8Array, maximumColors: number): Uint8Array | undefined {
   const headerChunk = chunks.find((chunk) => chunk.type === 'IHDR')
   if (!headerChunk || headerChunk.data.length !== 13 || chunks.some((chunk) => chunk.type === 'acTL')) return undefined
   const header = headerChunk.data
@@ -315,7 +326,7 @@ function quantizePng(chunks: PngChunk[], inflated: Uint8Array): Uint8Array | und
   const channels = colorType === 6 ? 4 : 3
   const pixels = decodePngPixels(inflated, width, height, channels)
   if (!pixels) return undefined
-  const { palette, lookup } = createPalette(pixels, channels)
+  const { palette, lookup } = createPalette(pixels, channels, maximumColors)
   if (!palette.length) return undefined
 
   const scanlines = new Uint8Array(height * (width + 1))
@@ -368,10 +379,10 @@ function quantizePng(chunks: PngChunk[], inflated: Uint8Array): Uint8Array | und
   return wrotePalette ? concat(output) : undefined
 }
 
-function optimizePng(bytes: Uint8Array): OptimizationResult {
+function optimizePng(bytes: Uint8Array, options: OptimizationOptions): OptimizationResult {
   const signature = [137, 80, 78, 71, 13, 10, 26, 10]
   if (bytes.length < PNG_SIGNATURE_LENGTH || signature.some((byte, index) => bytes[index] !== byte)) {
-    return { bytes, removedMetadata: 0 }
+    return { bytes, removedMetadata: 0, targetReached: options.targetSize === undefined || bytes.length <= options.targetSize }
   }
 
   const chunks: PngChunk[] = []
@@ -381,7 +392,7 @@ function optimizePng(bytes: Uint8Array): OptimizationResult {
   while (offset + 12 <= bytes.length) {
     const dataLength = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0)
     const chunkLength = dataLength + 12
-    if (offset + chunkLength > bytes.length) return { bytes, removedMetadata: 0 }
+    if (offset + chunkLength > bytes.length) return { bytes, removedMetadata: 0, targetReached: options.targetSize === undefined || bytes.length <= options.targetSize }
     const type = ascii(bytes, offset + 4, 4)
     chunks.push({
       type,
@@ -395,7 +406,7 @@ function optimizePng(bytes: Uint8Array): OptimizationResult {
     }
   }
 
-  if (!reachedEnd) return { bytes, removedMetadata: 0 }
+  if (!reachedEnd) return { bytes, removedMetadata: 0, targetReached: options.targetSize === undefined || bytes.length <= options.targetSize }
 
   const removedMetadata = chunks.filter((chunk) => PNG_REMOVABLE.has(chunk.type)).length
   const retainedChunks = chunks.filter((chunk) => !PNG_REMOVABLE.has(chunk.type))
@@ -426,14 +437,31 @@ function optimizePng(bytes: Uint8Array): OptimizationResult {
       const recompressed = concat([bytes.slice(0, PNG_SIGNATURE_LENGTH), ...recompressedChunks])
       if (recompressed.length < best.length) best = recompressed
 
-      const quantized = quantizePng(retainedChunks, inflated)
-      if (quantized && quantized.length < best.length) best = quantized
+      const targetSize = options.targetSize
+      if (targetSize !== undefined) {
+        const candidates = [bytes, metadataOptimized, recompressed]
+        for (const maximumColors of TARGET_PALETTE_SIZES) {
+          const quantized = quantizePng(retainedChunks, inflated, maximumColors)
+          if (quantized) candidates.push(quantized)
+        }
+        const eligible = candidates.filter((candidate) => candidate.length <= targetSize)
+        const smallestSize = Math.min(...candidates.map((candidate) => candidate.length))
+        if (!eligible.length) {
+          return { bytes, removedMetadata: 0, targetReached: false, smallestSize }
+        }
+        best = eligible.reduce((closest, candidate) => candidate.length > closest.length ? candidate : closest)
+      } else {
+        const strength = Math.min(9, Math.max(1, Math.round(options.strength ?? DEFAULT_STRENGTH)))
+        const quantized = quantizePng(retainedChunks, inflated, STRENGTH_COLORS[strength]!)
+        if (quantized && quantized.length < best.length) best = quantized
+      }
     } catch {
       // Invalid or unsupported image data still benefits from safe metadata removal.
     }
   }
 
-  return { bytes: best, removedMetadata: best === bytes ? 0 : removedMetadata }
+  const targetReached = options.targetSize === undefined || best.length <= options.targetSize
+  return { bytes: best, removedMetadata: best === bytes ? 0 : removedMetadata, targetReached, smallestSize: best.length }
 }
 
 function optimizeJpeg(bytes: Uint8Array): OptimizationResult {
@@ -557,10 +585,23 @@ function optimizeGif(bytes: Uint8Array): OptimizationResult {
   return { bytes: removedMetadata ? concat(parts) : bytes, removedMetadata }
 }
 
-export function optimizeImage(bytes: Uint8Array, mimeType: string): OptimizationResult {
-  if (mimeType === 'image/png') return optimizePng(bytes)
-  if (mimeType === 'image/jpeg') return optimizeJpeg(bytes)
-  if (mimeType === 'image/webp') return optimizeWebp(bytes)
-  if (mimeType === 'image/gif') return optimizeGif(bytes)
-  return { bytes, removedMetadata: 0 }
+export function optimizeImage(
+  bytes: Uint8Array,
+  mimeType: string,
+  options: OptimizationOptions = {},
+): OptimizationResult {
+  if (mimeType === 'image/png') return optimizePng(bytes, options)
+
+  let result: OptimizationResult
+  if (mimeType === 'image/jpeg') result = optimizeJpeg(bytes)
+  else if (mimeType === 'image/webp') result = optimizeWebp(bytes)
+  else if (mimeType === 'image/gif') result = optimizeGif(bytes)
+  else result = { bytes, removedMetadata: 0 }
+
+  if (options.targetSize === undefined) return { ...result, targetReached: true }
+  const candidates = [bytes, result.bytes]
+  const eligible = candidates.filter((candidate) => candidate.length <= options.targetSize!)
+  return eligible.length
+    ? { ...result, bytes: eligible.reduce((closest, candidate) => candidate.length > closest.length ? candidate : closest), targetReached: true }
+    : { bytes, removedMetadata: 0, targetReached: false, smallestSize: Math.min(...candidates.map((candidate) => candidate.length)) }
 }

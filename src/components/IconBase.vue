@@ -1,5 +1,5 @@
 <script setup lang="ts">
-defineProps<{ name: 'upload' | 'shield' | 'bolt' | 'layers' | 'download' | 'trash' | 'undo' | 'image' | 'lock' | 'arrow' | 'check' | 'plus' | 'chevron' }>()
+defineProps<{ name: 'upload' | 'shield' | 'bolt' | 'layers' | 'download' | 'trash' | 'undo' | 'image' | 'lock' | 'arrow' | 'check' | 'plus' | 'chevron' | 'sliders' }>()
 </script>
 
 <template>
@@ -42,6 +42,9 @@ defineProps<{ name: 'upload' | 'shield' | 'bolt' | 'layers' | 'download' | 'tras
     </template>
     <template v-else-if="name === 'chevron'">
       <path d="m8 10 4 4 4-4" />
+    </template>
+    <template v-else-if="name === 'sliders'">
+      <path d="M4 7h10M18 7h2M4 17h2M10 17h10" /><circle cx="16" cy="7" r="2" /><circle cx="8" cy="17" r="2" />
     </template>
   </svg>
 </template>
