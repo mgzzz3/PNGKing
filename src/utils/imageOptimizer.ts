@@ -458,19 +458,21 @@ function optimizePng(bytes: Uint8Array, options: OptimizationOptions): Optimizat
         if (!eligible.length) {
           return { bytes, removedMetadata: 0, targetReached: false, smallestSize }
         }
-        // File size is not a reliable proxy for visual quality: a smaller palette can
-        // occasionally produce more bytes because its index stream compresses worse.
-        // Prefer the richest palette that meets the target, then the smallest lossless
-        // representation when candidates have the same quality.
-        best = eligible.reduce((highestQuality, candidate) => {
-          if (candidate.paletteColors > highestQuality.paletteColors) return candidate
-          if (candidate.paletteColors < highestQuality.paletteColors) return highestQuality
-          return candidate.bytes.length < highestQuality.bytes.length ? candidate : highestQuality
+        // Honor the requested byte target first. Palette richness is only a tie-breaker:
+        // PNG compression is not monotonic, so the richest palette can unexpectedly be
+        // much smaller than another valid candidate and overshoot the user's target.
+        best = eligible.reduce((closest, candidate) => {
+          if (candidate.bytes.length > closest.bytes.length) return candidate
+          if (candidate.bytes.length < closest.bytes.length) return closest
+          return candidate.paletteColors > closest.paletteColors ? candidate : closest
         }).bytes
       } else {
         const strength = Math.min(9, Math.max(1, Math.round(options.strength ?? DEFAULT_STRENGTH)))
         const quantized = quantizePng(retainedChunks, inflated, STRENGTH_COLORS[strength]!)
-        if (quantized && quantized.length < best.length) best = quantized
+        // Strength is an explicit quality/size choice. Compare its palette result with
+        // the metadata-only source rather than silently replacing several lower levels
+        // with the same smallest lossless candidate.
+        if (quantized && quantized.length < metadataOptimized.length) best = quantized
       }
     } catch {
       // Invalid or unsupported image data still benefits from safe metadata removal.

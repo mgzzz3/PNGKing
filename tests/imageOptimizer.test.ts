@@ -136,13 +136,17 @@ describe('optimizeImage', () => {
       pngChunk('IEND'),
     )
 
-    const qualityFirst = optimizeImage(source, 'image/png', { strength: 1 })
-    const sizeFirst = optimizeImage(source, 'image/png', { strength: 9 })
+    const sizes = Array.from(
+      { length: 9 },
+      (_, index) => optimizeImage(source, 'image/png', { strength: index + 1 }).bytes.byteLength,
+    )
 
-    expect(sizeFirst.bytes.byteLength).toBeLessThan(qualityFirst.bytes.byteLength)
+    for (let index = 1; index < sizes.length; index += 1) {
+      expect(sizes[index]).toBeLessThan(sizes[index - 1]!)
+    }
   })
 
-  it('chooses the highest-quality result below a target instead of the smallest result', () => {
+  it('chooses the closest result below a target instead of the smallest result', () => {
     const width = 128
     const height = 128
     const scanlines = new Uint8Array(height * (width * 4 + 1))
