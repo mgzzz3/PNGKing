@@ -49,7 +49,7 @@ async function downloadAll() {
   <div class="editor-view">
     <div v-if="store.items.length" class="editor-content">
       <section class="editor-heading">
-        <div><span class="section-kicker">优化队列</span><h1>让图片轻装上阵</h1><p>像素保持原样，智能重压缩并清理冗余元数据。</p></div>
+        <div><span class="section-kicker">优化队列</span><h1>让图片轻装上阵</h1><p>自适应优化颜色数量，智能重压缩并清理冗余元数据。</p></div>
         <el-button class="add-more" size="large" @click="open()"><IconBase name="plus" />继续添加</el-button>
       </section>
 
@@ -92,7 +92,7 @@ async function downloadAll() {
     </div>
 
     <section v-else class="empty-state">
-      <span><IconBase name="image" /></span><h1>队列还是空的</h1><p>添加 PNG、JPG、WebP 或 GIF，马上开始无损优化。</p>
+      <span><IconBase name="image" /></span><h1>队列还是空的</h1><p>添加 PNG、JPG、WebP 或 GIF，马上开始智能优化。</p>
       <el-button type="primary" size="large" @click="open()"><IconBase name="plus" />选择图片</el-button>
       <RouterLink to="/">返回首页</RouterLink>
     </section>
