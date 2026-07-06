@@ -1,0 +1,51 @@
+name: AI agent task
+about: Create a scoped implementation task that can be assigned to Copilot cloud agent.
+title: "[Agent]: "
+labels:
+  - agent-ready
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for issues that should be handled automatically by GitHub Copilot cloud agent or another coding agent. After creating the issue, assign it to Copilot or configure a repository automation in the Agents tab to run on issues with the `agent-ready` label.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: Describe the user-visible change or bug fix in one or two sentences.
+      placeholder: "例如：在图片列表中显示每张图片的压缩耗时。"
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and constraints
+      description: List the files, components, edge cases, and non-goals the agent should respect.
+      placeholder: |
+        - Keep all image processing in the browser.
+        - Do not change analytics event names unless docs are updated.
+        - Relevant files: src/stores/images.ts, src/components/ImageRow.vue
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Provide checkable outcomes for the pull request.
+      placeholder: |
+        - Users can see the new value after optimization completes.
+        - Existing PNG/JPEG/WebP/GIF flows still pass tests.
+        - npm run check passes.
+    validations:
+      required: true
+  - type: textarea
+    id: testing
+    attributes:
+      label: Suggested validation
+      description: Tell the agent which commands or manual checks should be run.
+      value: |
+        - npm run lint
+        - npm test
+        - npm run build
+    validations:
+      required: true
