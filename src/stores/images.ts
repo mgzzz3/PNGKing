@@ -40,8 +40,7 @@ export const useImagesStore = defineStore('images', () => {
   const redoStack = ref<UndoEntry[]>([])
   const sortKey = ref<SortKey>('name')
   const isDownloading = ref(false)
-  const compressionStrength = ref(6)
-  const targetSize = ref(0)
+  const compressionQuality = ref(80)
   const processingVersions = new Map<string, number>()
 
   const totalOriginal = computed(() => items.value.reduce((sum, item) => sum + item.file.size, 0))
@@ -108,9 +107,7 @@ export const useImagesStore = defineStore('images', () => {
     item.error = undefined
     item.result = undefined
     item.estimatedSize = undefined
-    const settings = targetSize.value
-      ? { strength: compressionStrength.value, targetSize: targetSize.value }
-      : { strength: compressionStrength.value }
+    const settings = { quality: compressionQuality.value }
     try {
       const source = new Uint8Array(await item.file.arrayBuffer())
       const optimized = optimizeImage(source, item.file.type, settings)
@@ -118,13 +115,6 @@ export const useImagesStore = defineStore('images', () => {
       item.estimatedSize = optimized.targetReached === false ? optimized.smallestSize : optimized.bytes.byteLength
       await new Promise<void>((resolve) => window.setTimeout(resolve, 80))
       if (processingVersions.get(item.id) !== version) return false
-      if (optimized.targetReached === false) {
-        item.status = 'error'
-        item.optimizedSize = item.file.size
-        item.error = `无法压缩到目标大小，最小约 ${formatSize(optimized.smallestSize ?? item.file.size)}`
-        trackOptimization(item, 'target_unreachable', reason, startedAt, settings, optimized.smallestSize)
-        return false
-      }
       const useOptimized = optimized.bytes.byteLength < source.byteLength
       item.result = useOptimized
         ? new Blob([optimized.bytes as BlobPart], { type: item.file.type })
@@ -147,13 +137,12 @@ export const useImagesStore = defineStore('images', () => {
 
   function trackOptimization(
     item: ImageItem,
-    outcome: 'success' | 'target_unreachable' | 'processing_error',
+    outcome: 'success' | 'processing_error',
     reason: 'initial' | 'settings_change',
     startedAt: number,
-    settings: { strength: number; targetSize?: number },
-    smallestSize?: number,
+    settings: { quality: number },
   ) {
-    const resultSize = item.result?.size ?? smallestSize ?? item.file.size
+    const resultSize = item.result?.size ?? item.file.size
     trackEvent('optimization_result', {
       outcome,
       processing_reason: reason,
@@ -162,16 +151,10 @@ export const useImagesStore = defineStore('images', () => {
       original_kb: bytesToKilobytes(item.file.size),
       result_kb: bytesToKilobytes(resultSize),
       saving_percent: savingPercent(item.file.size, resultSize),
-      compression_mode: settings.targetSize ? 'target_size' : 'strength',
-      compression_strength: settings.targetSize ? undefined : settings.strength,
-      target_kb: settings.targetSize ? bytesToKilobytes(settings.targetSize) : undefined,
+      compression_mode: 'quality',
+      compression_quality: settings.quality,
       duration_ms: Date.now() - startedAt,
     })
-  }
-
-  function formatSize(bytes: number) {
-    if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`
-    return `${(bytes / 1024 / 1024).toFixed(1)} MB`
   }
 
   async function reprocessAll() {
@@ -234,7 +217,7 @@ export const useImagesStore = defineStore('images', () => {
 
   return {
     items, sortedItems, undoStack, redoStack, sortKey, isDownloading,
-    compressionStrength, targetSize,
+    compressionQuality,
     totalOriginal, totalOptimized, totalSaving, completedCount, failedCount,
     addFiles, processItem, reprocessAll, removeItem, clearAll, undo, redo, disposeAll,
   }

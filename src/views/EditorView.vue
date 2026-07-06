@@ -37,28 +37,26 @@ let settingsVersion = 0
 let settingsTimer: number | undefined
 
 async function applySettings(version: number) {
-  const mode = store.targetSize ? 'target_size' : 'strength'
   trackEvent('compression_settings_changed', {
-    compression_mode: mode,
-    compression_strength: store.targetSize ? undefined : store.compressionStrength,
-    target_kb: store.targetSize ? bytesToKilobytes(store.targetSize) : undefined,
+    compression_mode: 'quality',
+    compression_quality: store.compressionQuality,
     queue_count: store.items.length,
   })
   const results = await store.reprocessAll()
   if (version !== settingsVersion) return
   const failures = results.filter((result) => !result).length
   trackEvent('reprocessing_completed', {
-    compression_mode: mode,
+    compression_mode: 'quality',
     image_count: results.length,
     success_count: results.length - failures,
     failure_count: failures,
   })
-  if (failures) ElMessage.warning(`${failures} 张图片无法达到所选目标大小，已终止对应压缩`)
+  if (failures) ElMessage.warning(`${failures} 张图片处理失败`)
   else ElMessage.success('已按新设置重新压缩')
 }
 
 watch(
-  () => [store.compressionStrength, store.targetSize] as const,
+  () => store.compressionQuality,
   () => {
     const version = ++settingsVersion
     if (settingsTimer !== undefined) window.clearTimeout(settingsTimer)
@@ -139,23 +137,11 @@ async function downloadAll() {
           <div><span class="settings-icon"><IconBase name="sliders" /></span><div><strong id="compression-settings-title">压缩设置</strong><small>修改后会自动重新处理当前队列</small></div></div>
           <span class="local-badge">仅本地处理</span>
         </div>
-        <div class="setting-control strength-control" :class="{ disabled: store.targetSize > 0 }">
-          <div class="setting-label"><label for="compression-strength">压缩强度</label><strong>{{ store.compressionStrength }}</strong></div>
-          <input id="compression-strength" v-model.number="store.compressionStrength" type="range" min="1" max="9" step="1" :disabled="store.targetSize > 0" />
-          <div class="range-labels"><span>画质优先（1 级无损）</span><span>默认 6</span><span>体积优先</span></div>
-        </div>
-        <div class="setting-control">
-          <div class="setting-label"><label for="target-size">目标文件大小</label><small>每张图片</small></div>
-          <select id="target-size" v-model.number="store.targetSize">
-            <option :value="0">不指定（按压缩强度）</option>
-            <option :value="50 * 1024">50 KB</option>
-            <option :value="100 * 1024">100 KB</option>
-            <option :value="200 * 1024">200 KB</option>
-            <option :value="500 * 1024">500 KB</option>
-            <option :value="1024 * 1024">1 MB</option>
-            <option :value="2 * 1024 * 1024">2 MB</option>
-          </select>
-          <p>选择后会采用不超过目标且体积最接近的结果；无法达到时不会生成文件。</p>
+        <div class="setting-control strength-control">
+          <div class="setting-label"><label for="compression-quality">压缩质量</label><strong>{{ store.compressionQuality }}%</strong></div>
+          <input id="compression-quality" v-model.number="store.compressionQuality" type="range" min="0" max="100" step="1" />
+          <div class="range-labels"><span>体积优先 0%</span><span>推荐 80%</span><span>无损 100%</span></div>
+          <p>仅使用一个质量百分比控制压缩；PNG 会保留原始透明通道和图像结构，避免元素或图层丢失。</p>
         </div>
       </section>
 

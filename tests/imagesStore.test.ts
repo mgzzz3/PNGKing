@@ -51,9 +51,9 @@ describe('images store', () => {
     }
     store.items.push(item)
 
-    store.targetSize = 0
+    store.compressionQuality = 100
     const processing = store.processItem(item)
-    store.targetSize = 1
+    store.compressionQuality = 0
     releaseFile?.(minimalPng.slice().buffer)
     await Promise.resolve()
     await vi.advanceTimersByTimeAsync(100)
@@ -64,25 +64,5 @@ describe('images store', () => {
     vi.useRealTimers()
   })
 
-  it('shows an estimate while processing and stops when a target is unreachable', async () => {
-    vi.useFakeTimers()
-    const store = useImagesStore()
-    store.targetSize = 1
-    const file = new File([minimalPng], 'tiny-target.png', { type: 'image/png' })
-
-    store.addFiles([file])
-    await Promise.resolve()
-    await Promise.resolve()
-
-    expect(store.items[0]?.status).toBe('processing')
-    expect(store.items[0]?.estimatedSize).toBeGreaterThan(1)
-
-    await vi.advanceTimersByTimeAsync(100)
-
-    expect(store.items[0]?.status).toBe('error')
-    expect(store.items[0]?.result).toBeUndefined()
-    expect(store.items[0]?.error).toContain('无法压缩到目标大小')
-    vi.useRealTimers()
-  })
 
 })

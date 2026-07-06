@@ -1,8 +1,10 @@
 import { deflate, inflate } from 'pako'
 
 export interface OptimizationOptions {
+  /** Quality percentage from 0-100. 100 keeps pixels lossless. */
+  quality?: number
+  /** @deprecated Use quality instead. Retained for backward compatibility. */
   strength?: number
-  targetSize?: number
 }
 
 export interface OptimizationResult {
@@ -12,10 +14,8 @@ export interface OptimizationResult {
   smallestSize?: number
 }
 
-const DEFAULT_STRENGTH = 6
-const STRENGTH_COLORS: ReadonlyArray<number | undefined> = [undefined, undefined, 224, 192, 160, 128, 96, 64, 32, 16]
-const TARGET_TRUECOLOR_BITS = [7, 6, 5, 4, 3, 2, 1]
-const TARGET_PALETTE_SIZES = [256, 224, 192, 160, 128, 96, 64, 48, 32, 24, 16, 12, 8, 4, 2]
+const DEFAULT_QUALITY = 80
+const TRUECOLOR_QUALITY_BITS = [7, 6, 5, 4, 3, 2, 1]
 
 const PNG_SIGNATURE_LENGTH = 8
 const PNG_REMOVABLE = new Set(['tEXt', 'zTXt', 'iTXt', 'eXIf', 'tIME'])
@@ -341,7 +341,9 @@ function quantizeTruecolorPng(chunks: PngChunk[], inflated: Uint8Array, retained
       const alpha = channels === 4 ? pixels[sourceOffset + 3]! : 255
       for (let channel = 0; channel < channels; channel += 1) {
         const value = alpha === 0 && channel < 3 ? 0 : pixels[sourceOffset + channel]!
-        scanlines[outputOffset + channel] = Math.min(255, Math.floor((value + halfStep) / step) * step)
+        scanlines[outputOffset + channel] = channel === 3
+          ? value
+          : Math.min(255, Math.floor((value + halfStep) / step) * step)
       }
     }
   }
@@ -362,7 +364,9 @@ function quantizeTruecolorPng(chunks: PngChunk[], inflated: Uint8Array, retained
   return wroteImageData ? concat(output) : undefined
 }
 
-function quantizePng(chunks: PngChunk[], inflated: Uint8Array, maximumColors: number): Uint8Array | undefined {
+// Kept for future safe palette experiments, but the current UI avoids palette conversion.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function quantizePng(chunks: PngChunk[], inflated: Uint8Array, maximumColors: number): Uint8Array | undefined {
   const headerChunk = chunks.find((chunk) => chunk.type === 'IHDR')
   if (!headerChunk || headerChunk.data.length !== 13 || chunks.some((chunk) => chunk.type === 'acTL')) return undefined
   const header = headerChunk.data
@@ -433,7 +437,7 @@ function quantizePng(chunks: PngChunk[], inflated: Uint8Array, maximumColors: nu
 function optimizePng(bytes: Uint8Array, options: OptimizationOptions): OptimizationResult {
   const signature = [137, 80, 78, 71, 13, 10, 26, 10]
   if (bytes.length < PNG_SIGNATURE_LENGTH || signature.some((byte, index) => bytes[index] !== byte)) {
-    return { bytes, removedMetadata: 0, targetReached: options.targetSize === undefined || bytes.length <= options.targetSize }
+    return { bytes, removedMetadata: 0, targetReached: true }
   }
 
   const chunks: PngChunk[] = []
@@ -443,7 +447,7 @@ function optimizePng(bytes: Uint8Array, options: OptimizationOptions): Optimizat
   while (offset + 12 <= bytes.length) {
     const dataLength = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0)
     const chunkLength = dataLength + 12
-    if (offset + chunkLength > bytes.length) return { bytes, removedMetadata: 0, targetReached: options.targetSize === undefined || bytes.length <= options.targetSize }
+    if (offset + chunkLength > bytes.length) return { bytes, removedMetadata: 0, targetReached: true }
     const type = ascii(bytes, offset + 4, 4)
     chunks.push({
       type,
@@ -457,7 +461,7 @@ function optimizePng(bytes: Uint8Array, options: OptimizationOptions): Optimizat
     }
   }
 
-  if (!reachedEnd) return { bytes, removedMetadata: 0, targetReached: options.targetSize === undefined || bytes.length <= options.targetSize }
+  if (!reachedEnd) return { bytes, removedMetadata: 0, targetReached: true }
 
   const removedMetadata = chunks.filter((chunk) => PNG_REMOVABLE.has(chunk.type)).length
   const retainedChunks = chunks.filter((chunk) => !PNG_REMOVABLE.has(chunk.type))
@@ -488,57 +492,24 @@ function optimizePng(bytes: Uint8Array, options: OptimizationOptions): Optimizat
       const recompressed = concat([bytes.slice(0, PNG_SIGNATURE_LENGTH), ...recompressedChunks])
       if (recompressed.length < best.length) best = recompressed
 
-      const targetSize = options.targetSize
-      if (targetSize !== undefined) {
-        interface TargetCandidate {
-          bytes: Uint8Array
-          qualityRank: number
-        }
-
-        const candidates: TargetCandidate[] = [
-          { bytes, qualityRank: Number.POSITIVE_INFINITY },
-          { bytes: metadataOptimized, qualityRank: Number.POSITIVE_INFINITY },
-          { bytes: recompressed, qualityRank: Number.POSITIVE_INFINITY },
-        ]
-        for (const retainedBits of TARGET_TRUECOLOR_BITS) {
-          const quantized = quantizeTruecolorPng(retainedChunks, inflated, retainedBits)
-          if (quantized) candidates.push({ bytes: quantized, qualityRank: 1_000_000 + retainedBits })
-        }
-        for (const maximumColors of TARGET_PALETTE_SIZES) {
-          const quantized = quantizePng(retainedChunks, inflated, maximumColors)
-          if (quantized) candidates.push({ bytes: quantized, qualityRank: maximumColors })
-        }
-        const eligible = candidates.filter((candidate) => candidate.bytes.length <= targetSize)
-        const smallestSize = Math.min(...candidates.map((candidate) => candidate.bytes.length))
-        if (!eligible.length) {
-          return { bytes, removedMetadata: 0, targetReached: false, smallestSize }
-        }
-        // Honor the requested byte target first. Palette richness is only a tie-breaker:
-        // PNG compression is not monotonic, so the richest palette can unexpectedly be
-        // much smaller than another valid candidate and overshoot the user's target.
-        best = eligible.reduce((closest, candidate) => {
-          if (candidate.bytes.length > closest.bytes.length) return candidate
-          if (candidate.bytes.length < closest.bytes.length) return closest
-          return candidate.qualityRank > closest.qualityRank ? candidate : closest
-        }).bytes
-      } else {
-        const strength = Math.min(9, Math.max(1, Math.round(options.strength ?? DEFAULT_STRENGTH)))
-        const maximumColors = STRENGTH_COLORS[strength]
-        // Level 1 is the quality-first preset: keep every pixel unchanged and only use
-        // metadata removal plus lossless DEFLATE recompression. Levels 2-9 progressively
-        // reduce the palette, ending with the smallest 16-color preset at level 9.
-        const quantized = maximumColors === undefined
-          ? undefined
-          : quantizePng(retainedChunks, inflated, maximumColors)
-        if (quantized && quantized.length < metadataOptimized.length) best = quantized
+      const quality = Math.min(100, Math.max(0, Math.round(
+        options.quality ?? (options.strength === undefined ? DEFAULT_QUALITY : (options.strength / 9) * 100),
+      )))
+      // Keep the PNG in truecolor/RGBA form at every lossy level. Converting complex
+      // artwork to an indexed palette can collapse transparency and make small
+      // elements appear to disappear, so the quality slider only reduces RGB bit
+      // precision while preserving the original alpha channel and chunk structure.
+      if (quality < 100) {
+        const retainedBits = TRUECOLOR_QUALITY_BITS[Math.min(TRUECOLOR_QUALITY_BITS.length - 1, Math.floor((100 - quality) / 100 * TRUECOLOR_QUALITY_BITS.length))]!
+        const quantized = quantizeTruecolorPng(retainedChunks, inflated, retainedBits)
+        if (quantized && quantized.length < best.length) best = quantized
       }
     } catch {
       // Invalid or unsupported image data still benefits from safe metadata removal.
     }
   }
 
-  const targetReached = options.targetSize === undefined || best.length <= options.targetSize
-  return { bytes: best, removedMetadata: best === bytes ? 0 : removedMetadata, targetReached, smallestSize: best.length }
+  return { bytes: best, removedMetadata: best === bytes ? 0 : removedMetadata, targetReached: true, smallestSize: best.length }
 }
 
 function optimizeJpeg(bytes: Uint8Array): OptimizationResult {
@@ -675,10 +646,5 @@ export function optimizeImage(
   else if (mimeType === 'image/gif') result = optimizeGif(bytes)
   else result = { bytes, removedMetadata: 0 }
 
-  if (options.targetSize === undefined) return { ...result, targetReached: true }
-  const candidates = [bytes, result.bytes]
-  const eligible = candidates.filter((candidate) => candidate.length <= options.targetSize!)
-  return eligible.length
-    ? { ...result, bytes: eligible.reduce((closest, candidate) => candidate.length > closest.length ? candidate : closest), targetReached: true }
-    : { bytes, removedMetadata: 0, targetReached: false, smallestSize: Math.min(...candidates.map((candidate) => candidate.length)) }
+  return { ...result, targetReached: true }
 }
