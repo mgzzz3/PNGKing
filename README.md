@@ -44,6 +44,15 @@ npm run preview
 3. 推送到 `main`。`.github/workflows/deploy.yml` 会自动执行 lint、单元测试、类型检查和构建，通过后发布 Pages。
 4. 工作流根据仓库名自动设置 Vite base path，并生成 `404.html` 作为 Vue Router 的 SPA 回退。
 
+
+## Issue 自动化
+
+本仓库包含 GitHub Copilot cloud agent 的准备配置：
+
+1. 使用 **Issues → New issue → AI agent task** 创建范围明确的任务，模板会自动添加 `agent-ready` 标签。
+2. 在 GitHub 仓库的 **Agents** 标签页创建自动化：触发器选择“issue created”，过滤 `agent-ready` 标签，并让 Copilot 根据 issue 内容实现改动、运行校验并提交 PR。
+3. `.github/workflows/copilot-setup-steps.yml` 会为 Copilot 预装 Node.js 22、执行 `npm ci` 并运行 `npm run check`，让代理在提交 PR 前使用与项目一致的验证流程。
+
 ## 技术栈
 
 Vue 3、Vite、TypeScript strict、Pinia、Vue Router 4、Element Plus、VueUse、JSZip、Vitest。
