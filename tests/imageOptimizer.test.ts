@@ -48,7 +48,7 @@ describe('optimizeImage', () => {
     expect(inflate(optimizedImageData)).toEqual(scanlines)
   })
 
-  it('keeps PNG quality compression in truecolor to preserve image structure', () => {
+  it('uses PNG quality compression to resize without changing color mode', () => {
     const width = 64
     const height = 64
     const scanlines = new Uint8Array(height * (width * 4 + 1))
@@ -134,7 +134,7 @@ describe('optimizeImage', () => {
     expect(inflate(optimizedImageData)).toEqual(scanlines)
   })
 
-  it('uses quality percentage to trade RGB precision for file size', () => {
+  it('uses quality percentage to resize while preserving sampled pixel values', () => {
     const width = 128
     const height = 128
     const scanlines = new Uint8Array(height * (width * 4 + 1))
@@ -156,8 +156,22 @@ describe('optimizeImage', () => {
 
     const lossless = optimizeImage(source, 'image/png', { quality: 100 })
     const compact = optimizeImage(source, 'image/png', { quality: 0 })
+    const output = new TextDecoder('latin1').decode(compact.bytes)
+    const headerOffset = output.indexOf('IHDR')
+    const idatOffset = output.indexOf('IDAT')
+    const compactWidth = new DataView(compact.bytes.buffer, compact.bytes.byteOffset + headerOffset + 4, 4).getUint32(0)
+    const compactHeight = new DataView(compact.bytes.buffer, compact.bytes.byteOffset + headerOffset + 8, 4).getUint32(0)
+    const idatLength = new DataView(compact.bytes.buffer, compact.bytes.byteOffset + idatOffset - 4, 4).getUint32(0)
+    const optimizedImageData = compact.bytes.slice(idatOffset + 4, idatOffset + 4 + idatLength)
+    const resizedScanlines = inflate(optimizedImageData)
 
     expect(compact.bytes.byteLength).toBeLessThan(lossless.bytes.byteLength)
+    expect(compactWidth).toBe(64)
+    expect(compactHeight).toBe(64)
+    expect(resizedScanlines[1]).toBe(scanlines[1])
+    expect(resizedScanlines[2]).toBe(scanlines[2])
+    expect(resizedScanlines[3]).toBe(scanlines[3])
+    expect(resizedScanlines[4]).toBe(scanlines[4])
   })
 
   it('returns unsupported files unchanged', () => {
