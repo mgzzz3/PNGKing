@@ -15,7 +15,7 @@ export interface OptimizationResult {
 }
 
 const DEFAULT_QUALITY = 80
-const TRUECOLOR_QUALITY_BITS = [7, 6, 5, 4, 3, 2, 1]
+const MIN_RESIZE_SCALE = 0.5
 
 const PNG_SIGNATURE_LENGTH = 8
 const PNG_REMOVABLE = new Set(['tEXt', 'zTXt', 'iTXt', 'eXIf', 'tIME'])
@@ -312,7 +312,7 @@ function createPalette(pixels: Uint8Array, channels: number, maximumColors = 256
   return { palette, lookup }
 }
 
-function quantizeTruecolorPng(chunks: PngChunk[], inflated: Uint8Array, retainedBits: number): Uint8Array | undefined {
+function resizeTruecolorPng(chunks: PngChunk[], inflated: Uint8Array, quality: number): Uint8Array | undefined {
   const headerChunk = chunks.find((chunk) => chunk.type === 'IHDR')
   if (!headerChunk || headerChunk.data.length !== 13 || chunks.some((chunk) => chunk.type === 'acTL')) return undefined
   const header = headerChunk.data
@@ -324,35 +324,40 @@ function quantizeTruecolorPng(chunks: PngChunk[], inflated: Uint8Array, retained
   const interlace = header[12]
   if (!width || !height || bitDepth !== 8 || interlace !== 0 || (colorType !== 2 && colorType !== 6)) return undefined
 
+  const scale = MIN_RESIZE_SCALE + (quality / 100) * (1 - MIN_RESIZE_SCALE)
+  const resizedWidth = Math.max(1, Math.round(width * scale))
+  const resizedHeight = Math.max(1, Math.round(height * scale))
+  if (resizedWidth === width && resizedHeight === height) return undefined
+
   const channels = colorType === 6 ? 4 : 3
   const pixels = decodePngPixels(inflated, width, height, channels)
   if (!pixels) return undefined
 
-  const discardedBits = 8 - retainedBits
-  const step = 1 << discardedBits
-  const halfStep = step >> 1
-  const scanlines = new Uint8Array(height * (width * channels + 1))
-  for (let row = 0; row < height; row += 1) {
-    const scanlineOffset = row * (width * channels + 1)
-    const pixelOffset = row * width * channels
-    for (let column = 0; column < width; column += 1) {
-      const sourceOffset = pixelOffset + column * channels
+  const scanlines = new Uint8Array(resizedHeight * (resizedWidth * channels + 1))
+  for (let row = 0; row < resizedHeight; row += 1) {
+    const sourceRow = Math.min(height - 1, Math.floor((row * height) / resizedHeight))
+    const scanlineOffset = row * (resizedWidth * channels + 1)
+    for (let column = 0; column < resizedWidth; column += 1) {
+      const sourceColumn = Math.min(width - 1, Math.floor((column * width) / resizedWidth))
+      const sourceOffset = (sourceRow * width + sourceColumn) * channels
       const outputOffset = scanlineOffset + 1 + column * channels
-      const alpha = channels === 4 ? pixels[sourceOffset + 3]! : 255
       for (let channel = 0; channel < channels; channel += 1) {
-        const value = alpha === 0 && channel < 3 ? 0 : pixels[sourceOffset + channel]!
-        scanlines[outputOffset + channel] = channel === 3
-          ? value
-          : Math.min(255, Math.floor((value + halfStep) / step) * step)
+        scanlines[outputOffset + channel] = pixels[sourceOffset + channel]!
       }
     }
   }
 
-  const compressed = deflate(refilterPngScanlines(scanlines, header), { level: 9 })
+  const resizedHeader = header.slice()
+  const resizedHeaderView = new DataView(resizedHeader.buffer, resizedHeader.byteOffset, resizedHeader.byteLength)
+  resizedHeaderView.setUint32(0, resizedWidth)
+  resizedHeaderView.setUint32(4, resizedHeight)
+  const compressed = deflate(refilterPngScanlines(scanlines, resizedHeader), { level: 9 })
   const output: Uint8Array[] = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])]
   let wroteImageData = false
   for (const chunk of chunks) {
-    if (chunk.type === 'IDAT') {
+    if (chunk.type === 'IHDR') {
+      output.push(createPngChunk('IHDR', resizedHeader))
+    } else if (chunk.type === 'IDAT') {
       if (!wroteImageData) {
         output.push(createPngChunk('IDAT', compressed))
         wroteImageData = true
@@ -365,7 +370,6 @@ function quantizeTruecolorPng(chunks: PngChunk[], inflated: Uint8Array, retained
 }
 
 // Kept for future safe palette experiments, but the current UI avoids palette conversion.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function quantizePng(chunks: PngChunk[], inflated: Uint8Array, maximumColors: number): Uint8Array | undefined {
   const headerChunk = chunks.find((chunk) => chunk.type === 'IHDR')
   if (!headerChunk || headerChunk.data.length !== 13 || chunks.some((chunk) => chunk.type === 'acTL')) return undefined
@@ -496,13 +500,13 @@ function optimizePng(bytes: Uint8Array, options: OptimizationOptions): Optimizat
         options.quality ?? (options.strength === undefined ? DEFAULT_QUALITY : (options.strength / 9) * 100),
       )))
       // Keep the PNG in truecolor/RGBA form at every lossy level. Converting complex
-      // artwork to an indexed palette can collapse transparency and make small
-      // elements appear to disappear, so the quality slider only reduces RGB bit
-      // precision while preserving the original alpha channel and chunk structure.
+      // artwork to an indexed palette or reducing channel precision changes colors,
+      // transparency, and ranges. Lower quality therefore reduces pixel dimensions
+      // instead, similar to exporting 4K artwork as 2K: sampled pixel values remain
+      // unchanged while the image becomes less detailed.
       if (quality < 100) {
-        const retainedBits = TRUECOLOR_QUALITY_BITS[Math.min(TRUECOLOR_QUALITY_BITS.length - 1, Math.floor((100 - quality) / 100 * TRUECOLOR_QUALITY_BITS.length))]!
-        const quantized = quantizeTruecolorPng(retainedChunks, inflated, retainedBits)
-        if (quantized && quantized.length < best.length) best = quantized
+        const resized = resizeTruecolorPng(retainedChunks, inflated, quality)
+        if (resized && resized.length < best.length) best = resized
       }
     } catch {
       // Invalid or unsupported image data still benefits from safe metadata removal.
